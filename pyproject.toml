@@ -1,0 +1,75 @@
+[project]
+name = "localmelo"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "black",
+    "mypy",
+    "pytest",
+    "pytest-asyncio",
+    "pre-commit",
+]
+
+[project.scripts]
+melo = "localmelo.__main__:main"
+
+# ── black ──
+[tool.black]
+line-length = 88
+target-version = ["py311"]
+
+# ── ruff ──
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+cache-dir = ".cache/ruff"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",   # line length (black handles this)
+    "SIM115", # context manager for open() — not practical in lambdas
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["localmelo"]
+
+# ── mypy ──
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+exclude = ["^__main__\\.py$"]
+cache_dir = ".cache/mypy"
+
+[[tool.mypy.overrides]]
+module = ["numpy.*", "httpx.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "__main__"
+ignore_errors = true
+
+# ── pytest ──
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+cache_dir = ".cache/pytest"

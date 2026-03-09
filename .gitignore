@@ -1,0 +1,8 @@
+# caches (all tools write to .cache/)
+.cache/
+__pycache__/
+
+# build
+*.egg-info/
+dist/
+build/

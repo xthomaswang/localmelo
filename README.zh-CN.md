@@ -78,6 +78,44 @@ localmelo/
 - `support/` 是支撑 agent 运行的基础设施层
 - `melo/` 不应直接依赖 `support/` 的具体实现
 
+### 高层架构图
+
+```mermaid
+flowchart LR
+    U["User / Client"] --> G["support/gateway"]
+
+    subgraph Core["melo/（核心 agent runtime）"]
+        A["agent/"]
+        M["memory/"]
+        C["checker/"]
+        E["executor/"]
+        SL["sleep/"]
+        CT["contracts/ + schema"]
+    end
+
+    subgraph Infra["support/（基础设施）"]
+        P["providers/"]
+        SV["serving/"]
+        MD["models/"]
+        CF["config.py + onboard.py"]
+    end
+
+    G --> A
+    A --> M
+    A --> C
+    A --> E
+    A -. 通过接口依赖 .-> CT
+    P -. 实现这些接口 .-> CT
+
+    G --> P
+    G --> CF
+    P --> SV
+    SV --> MD
+
+    SL -. 离线 personalization pipeline .-> M
+    SL -. 规划中的个性化更新 .-> P
+```
+
 ### 结构说明
 
 #### `melo/`
@@ -107,6 +145,20 @@ localmelo/
 - `config.py`：持久化运行配置
 - `onboard.py`：初始化和 onboarding 流程
 - `3rdparty/`：support 层依赖的第三方组件
+
+### Sleep Module 流程图
+
+```mermaid
+flowchart LR
+    H["history / personalized memory"] --> PP["sleep/preprocess"]
+    PP --> TR["sleep/training"]
+    TR --> EV["sleep/evaluation"]
+    EV --> ST["sleep/state"]
+
+    EV -->|通过后| UP["规划中的 embedding / personalization update"]
+    UP -. 增强 .-> PR["personalization behavior"]
+    UP -. 强化 .-> PM["procedural memory"]
+```
 
 ## 快速开始
 

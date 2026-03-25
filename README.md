@@ -81,6 +81,44 @@ Design rule:
 - `support/` is the infrastructure layer that supports the agent
 - `melo/` should not depend on `support/` implementations directly
 
+### High-Level Architecture
+
+```mermaid
+flowchart LR
+    U["User / Client"] --> G["support/gateway"]
+
+    subgraph Core["melo/ (core agent runtime)"]
+        A["agent/"]
+        M["memory/"]
+        C["checker/"]
+        E["executor/"]
+        SL["sleep/"]
+        CT["contracts/ + schema"]
+    end
+
+    subgraph Infra["support/ (infrastructure)"]
+        P["providers/"]
+        SV["serving/"]
+        MD["models/"]
+        CF["config.py + onboard.py"]
+    end
+
+    G --> A
+    A --> M
+    A --> C
+    A --> E
+    A -. uses interfaces from .-> CT
+    P -. implements .-> CT
+
+    G --> P
+    G --> CF
+    P --> SV
+    SV --> MD
+
+    SL -. offline personalization pipeline .-> M
+    SL -. planned personalization updates .-> P
+```
+
 ### Structure Overview
 
 #### `melo/`
@@ -115,6 +153,20 @@ It currently includes:
 - `config.py`: persistent runtime configuration
 - `onboard.py`: setup and onboarding flow
 - `3rdparty/`: vendored third-party dependencies needed by the support layer
+
+### Sleep Module Flow
+
+```mermaid
+flowchart LR
+    H["history / personalized memory"] --> PP["sleep/preprocess"]
+    PP --> TR["sleep/training"]
+    TR --> EV["sleep/evaluation"]
+    EV --> ST["sleep/state"]
+
+    EV -->|approved| UP["planned embedding / personalization update"]
+    UP -. improves .-> PR["personalization behavior"]
+    UP -. strengthens .-> PM["procedural memory"]
+```
 
 ## Getting Started
 

@@ -1,10 +1,10 @@
 import pytest
 
-from localmelo.memory.history import History
-from localmelo.memory.long import LongTerm
-from localmelo.memory.short import ShortTerm
-from localmelo.memory.tools import ToolRegistry
-from localmelo.schema import Message, StepRecord, TaskRecord, ToolDef
+from localmelo.melo.memory.history import History
+from localmelo.melo.memory.long import LongTerm
+from localmelo.melo.memory.short import ShortTerm
+from localmelo.melo.memory.tools import ToolRegistry
+from localmelo.melo.schema import Message, StepRecord, TaskRecord, ToolDef
 
 
 class TestShortTerm:

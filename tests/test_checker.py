@@ -1,7 +1,7 @@
 import pytest
 
-from localmelo.checker import Checker
-from localmelo.schema import Message, ToolCall, ToolDef, ToolResult
+from localmelo.melo.checker import Checker
+from localmelo.melo.schema import Message, ToolCall, ToolDef, ToolResult
 
 
 @pytest.fixture

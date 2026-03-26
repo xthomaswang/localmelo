@@ -79,68 +79,7 @@ localmelo/
 
 ---
 
-**[交互式架构图](https://xthomaswang.github.io/localmelo/architecture.html)** — 点击组件查看详情，高亮关联连接
-
-### localmelo 高层架构图
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    U["用户 / 客户端"]
-
-    subgraph gateway["support / gateway"]
-        G["Gateway\n会话管理"]
-    end
-
-    subgraph core["melo — 核心 agent runtime"]
-        A["Agent / Planner"]
-        M["Memory\nshort · long · history\npersonalized · tools"]
-        E["Executor\ntools · builtins · policy"]
-        C{{"Checker\n校验守卫"}}
-        SL["Sleep\n离线 personalization\npipeline"]
-    end
-
-    subgraph infra["support — 基础设施"]
-        P["Providers\nLLM · Embedding"]
-        SV["Serving"]
-        MD["Models"]
-        CF["Config / Onboard"]
-    end
-
-    U --> G
-    G --> A
-    A <-->|"规划 ↔ 检索"| M
-    A <-->|"规划 ↔ 执行"| E
-
-    C -.->|校验| G
-    C -.->|校验| M
-    C -.->|校验| E
-    C -.->|"失败 → 重新规划"| A
-
-    P -.->|LLM| A
-    P -.->|embedding| M
-
-    CF -.-> G
-    SV --> MD
-
-    SL -.->|整合| M
-    SL -.->|未来训练| P
-
-    classDef validationGuard fill:#f1f5f9,stroke:#94a3b8,stroke-dasharray:5 5
-    classDef offlinePipeline fill:#f8fafc,stroke:#cbd5e1,stroke-dasharray:5 5
-    class C validationGuard
-    class SL offlinePipeline
-```
-
-> **Checker** 不是处理阶段 — 它是一个校验守卫层，监控组件之间的通信。
-> 当校验失败时，控制权交还给 Agent 进行重新规划。
->
-> **Model / Provider** 层仅被 Agent（LLM chat）和 Memory（embedding）使用。
-> Executor 不会直接调用 model 层。
->
-> **Sleep** 是离线 pipeline，在用户空闲时运行，不在在线请求路径中。
-
----
+**[交互式架构图](https://localmelo.github.io/localmelo/architecture.html)** — 点击组件查看详情，高亮关联连接
 
 <details>
 <summary><b>Agent / Planner</b> — 主循环、chat planning、调度</summary>

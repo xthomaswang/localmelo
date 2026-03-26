@@ -82,7 +82,7 @@ localmelo/
 
 ---
 
-**[Interactive Architecture Diagram](https://xthomaswang.github.io/localmelo/architecture.html)** — click components, highlight connections, detail panels
+**[Interactive Architecture Diagram](https://localmelo.github.io/localmelo/architecture.html)** — click components, highlight connections, detail panels
 
 <details>
 <summary><b>Agent / Planner</b> — main loop, chat planning, orchestration</summary>

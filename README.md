@@ -68,6 +68,37 @@ What is intentionally still incomplete:
 - production-grade developer documentation and examples
 - finalized external APIs
 
+## Suggested Work Breakdown
+
+To make the current scope more explicit, development can be split into five
+parts:
+
+1. **Online Core Loop**
+   Stabilize the agent planning/execution loop, built-in tools, checker
+   boundaries, and the core task-solving path.
+2. **Memory System**
+   Improve short-term, history, and long-term memory behavior, persistence,
+   retrieval quality, and promotion policies.
+3. **Deployment / Product Shell**
+   Turn config, onboarding, local model serving, gateway, session handling,
+   and the web UI into a reliable local-first MVP.
+4. **Personalization / Sleep Pipeline**
+   Turn personalized memory, preprocessing, training, evaluation, and
+   promotion into a real offline workflow.
+5. **Quality / Release**
+   Strengthen tests, CI, examples, benchmarks, documentation, and external
+   API stability.
+
+Recommended execution order:
+
+1. build parts 1-3 first to reach a usable local MVP
+2. treat part 4 as a second-phase differentiator
+3. keep part 5 active throughout, then do a release-quality pass before any
+   public beta
+
+At a high level, the repository is currently furthest along in parts 1-3,
+partially developed in part 5, and still mostly scaffolding in part 4.
+
 ## Architecture
 
 > **Design rule:** `melo/` is the core agent layer. `support/` is the infrastructure

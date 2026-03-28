@@ -65,6 +65,34 @@
 - 面向使用者的完整文档和示例
 - 最终稳定的外部 API
 
+## 建议的开发拆分
+
+为了把当前范围说得更清楚，后续开发可以拆成五个部分：
+
+1. **在线核心闭环**
+   稳定 agent 的 planning / execution 主循环、内置 tools、checker 边界，
+   以及核心任务求解路径。
+2. **Memory System**
+   完善 short-term、history、long-term memory 的行为、持久化、检索质量
+   和 promotion 策略。
+3. **部署与产品外壳**
+   把 config、onboarding、本地模型 serving、gateway、session 管理和
+   web UI 收敛成一个可靠的本地优先 MVP。
+4. **Personalization / Sleep Pipeline**
+   把 personalized memory、preprocess、training、evaluation、promotion
+   串成真正可运行的离线工作流。
+5. **质量与发布**
+   补强测试、CI、示例、benchmark、文档以及外部 API 的稳定性。
+
+建议的推进顺序：
+
+1. 先完成第 1-3 部分，做出一个可用的本地 MVP
+2. 把第 4 部分作为第二阶段的差异化能力
+3. 第 5 部分持续推进，并在任何公开 beta 之前做一次发布质量收口
+
+从当前仓库状态看，第 1-3 部分相对最成熟，第 5 部分有一定基础，
+第 4 部分目前仍然主要是 scaffolding。
+
 ## 架构
 
 > **核心设计原则：** `melo/` 是主要的 agent 层。`support/` 是支撑 agent 运行的

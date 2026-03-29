@@ -2,8 +2,12 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from typing import TYPE_CHECKING
 
 from localmelo.melo.agent import Agent
+
+if TYPE_CHECKING:
+    from localmelo.support.config import Config
 
 
 async def _run(agent: Agent, query: str | None) -> None:
@@ -33,7 +37,6 @@ def main() -> None:
     parser.add_argument("query", nargs="*", help="Task to execute (direct mode)")
     parser.add_argument("--base-url", default=None, help="LLM API base URL")
     parser.add_argument("--chat-model", default=None, help="Chat model name")
-    parser.add_argument("--embed-model", default=None, help="Embedding model name")
 
     # gateway mode
     parser.add_argument("--serve", action="store_true", help="Run as gateway server")
@@ -60,8 +63,6 @@ def main() -> None:
             kwargs: dict = {}
             if args.port is not None:
                 kwargs["port"] = args.port
-            if args.base_url is not None:
-                kwargs["base_url"] = args.base_url
             path = daemon.install(**kwargs)
             print(f"Daemon installed: {path}")
         elif args.daemon == "uninstall":
@@ -78,11 +79,7 @@ def main() -> None:
     # direct mode (no gateway, original behavior)
     if args.query and not args.serve:
         query = " ".join(args.query)
-        agent = Agent(
-            base_url=args.base_url,
-            chat_model=args.chat_model,
-            embed_model=args.embed_model,
-        )
+        agent = _build_direct_mode_agent(args)
         asyncio.run(_run(agent, query))
         return
 
@@ -114,6 +111,51 @@ def main() -> None:
         raise SystemExit(1) from e
 
     # start gateway (with LLM subprocess)
+    _start_gateway(cfg)
+
+
+def _build_direct_mode_agent(args: argparse.Namespace) -> Agent:
+    """Build an Agent for direct CLI mode from CLI flags.
+
+    Three cases:
+    1. No --base-url: default local mlc-llm backend via Config
+    2. Ollama-style URL (port 11434): Ollama backend via Config
+    3. Arbitrary OpenAI-compatible URL: direct provider injection,
+       no-embedding mode (preserves the exact URL as given)
+    """
+    base_url = args.base_url
+    chat_model = args.chat_model or "qwen3-1.7b"
+
+    if not base_url:
+        # Case 1: default local mlc-llm
+        from localmelo.support.config import Config, MlcConfig
+
+        cfg = Config(backend="mlc-llm", mlc=MlcConfig(chat_model=chat_model))
+        return Agent(config=cfg)
+
+    if ":11434" in base_url:
+        # Case 2: Ollama
+        from localmelo.support.config import Config, OllamaConfig
+
+        return Agent(
+            config=Config(
+                backend="ollama",
+                ollama=OllamaConfig(
+                    chat_url=base_url.replace("/v1", "").rstrip("/"),
+                    chat_model=chat_model,
+                ),
+            )
+        )
+
+    # Case 3: arbitrary OpenAI-compatible URL — preserve exactly
+    from localmelo.support.providers.llm.openai_compat import OpenAICompatLLM
+
+    llm = OpenAICompatLLM(base_url=base_url, model=chat_model)
+    return Agent(llm=llm, embedding=None)
+
+
+def _start_gateway(cfg: Config) -> None:
+    """Thin seam for gateway startup — keeps the lazy import local."""
     from localmelo.support.gateway import start_gateway
 
     print("\n  Starting localmelo gateway ...")

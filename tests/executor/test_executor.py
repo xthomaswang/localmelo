@@ -454,5 +454,210 @@ class TestWorkspacePolicy(unittest.TestCase):
             self.assertTrue(policy.check_path(td))
 
 
+# ── 8. All builtins via execute_structured() ──
+
+
+class TestAllBuiltinsStructured(unittest.IsolatedAsyncioTestCase):
+    """Every builtin must work through execute_structured()."""
+
+    def setUp(self) -> None:
+        self.tmpdir = tempfile.mkdtemp()
+        self.executor, self.hippo, _ = _make_executor()
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    async def test_shell_exec_structured(self) -> None:
+        outcome = await self.executor.execute_structured(
+            ExecutionRequest(
+                tool_name="shell_exec",
+                arguments={"command": "echo structured"},
+            )
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.SUCCESS)
+        self.assertEqual(outcome.output, "structured")
+        self.assertGreater(outcome.duration_ms, 0)
+
+    async def test_file_write_structured(self) -> None:
+        path = os.path.join(self.tmpdir, "structured.txt")
+        outcome = await self.executor.execute_structured(
+            ExecutionRequest(
+                tool_name="file_write",
+                arguments={"path": path, "content": "hello structured"},
+            )
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.SUCCESS)
+        self.assertIn("Written", outcome.output)
+        self.assertEqual(len(outcome.artifacts), 1)
+        self.assertEqual(outcome.artifacts[0].kind, "file")
+
+    async def test_file_read_structured(self) -> None:
+        path = os.path.join(self.tmpdir, "read_me.txt")
+        with open(path, "w") as f:
+            f.write("structured content")
+        outcome = await self.executor.execute_structured(
+            ExecutionRequest(
+                tool_name="file_read",
+                arguments={"path": path},
+            )
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.SUCCESS)
+        self.assertEqual(outcome.output, "structured content")
+        self.assertEqual(len(outcome.artifacts), 1)
+
+    async def test_python_exec_structured(self) -> None:
+        outcome = await self.executor.execute_structured(
+            ExecutionRequest(
+                tool_name="python_exec",
+                arguments={"code": "print(3*7)"},
+            )
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.SUCCESS)
+        self.assertEqual(outcome.output, "21")
+
+
+# ── 9. All blocked commands via both execute() and execute_structured() ──
+
+
+class TestAllBlockedCommands(unittest.IsolatedAsyncioTestCase):
+    """Every pattern in BLOCKED_COMMANDS must be caught by both paths."""
+
+    def setUp(self) -> None:
+        self.executor, self.hippo, _ = _make_executor()
+
+    DANGEROUS_COMMANDS = [
+        ("rm -rf /home", "rm -rf"),
+        ("mkfs /dev/sda1", "mkfs"),
+        ("dd if=/dev/zero of=/dev/sda", "dd"),
+        (":(){:|:&};:", "fork bomb compact"),
+        (":() { :|:& };:", "fork bomb spaced"),
+        (":() { :|:& }; :", "fork bomb spaced trailing"),
+        ("shutdown -h now", "shutdown"),
+        ("reboot", "reboot"),
+    ]
+
+    async def test_blocked_via_execute(self) -> None:
+        for cmd, label in self.DANGEROUS_COMMANDS:
+            with self.subTest(label=label):
+                result = await self.executor.execute(
+                    ToolCall(
+                        tool_name="shell_exec",
+                        arguments={"command": cmd},
+                    )
+                )
+                self.assertIn(
+                    "Blocked",
+                    result.error,
+                    f"{label!r} should be blocked via execute()",
+                )
+
+    async def test_blocked_via_execute_structured(self) -> None:
+        for cmd, label in self.DANGEROUS_COMMANDS:
+            with self.subTest(label=label):
+                outcome = await self.executor.execute_structured(
+                    ExecutionRequest(
+                        tool_name="shell_exec",
+                        arguments={"command": cmd},
+                    )
+                )
+                self.assertEqual(
+                    outcome.status,
+                    ExecutionStatus.BLOCKED,
+                    f"{label!r} should be BLOCKED via execute_structured()",
+                )
+                self.assertEqual(
+                    outcome.error_category,
+                    ErrorCategory.BLOCKED_BY_CHECKER,
+                )
+
+
+# ── 10. Unknown tool error categories and messages ──
+
+
+class TestUnknownToolErrorMessages(unittest.IsolatedAsyncioTestCase):
+    """Distinct error messages for 'not in registry' vs 'callable missing'."""
+
+    def setUp(self) -> None:
+        self.executor, self.hippo, _ = _make_executor()
+
+    async def test_not_in_registry_error_message(self) -> None:
+        outcome = await self.executor.execute_structured(
+            ExecutionRequest(tool_name="totally_unknown")
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.ERROR)
+        self.assertEqual(outcome.error_category, ErrorCategory.TOOL_NOT_FOUND)
+        self.assertIn("not found in registry", outcome.error.lower())
+
+    async def test_callable_not_registered_error_message(self) -> None:
+        """ToolDef exists but no callable registered."""
+        ghost_def = ToolDef(
+            name="ghost_tool",
+            description="Has a def but no callable",
+            parameters={"type": "object", "properties": {}},
+        )
+        self.hippo.register_tool(ghost_def)
+        # Deliberately do NOT register a callable
+
+        outcome = await self.executor.execute_structured(
+            ExecutionRequest(tool_name="ghost_tool")
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.ERROR)
+        self.assertEqual(outcome.error_category, ErrorCategory.TOOL_NOT_FOUND)
+        self.assertIn("no callable registered", outcome.error.lower())
+
+    async def test_distinct_messages(self) -> None:
+        """The two error paths produce distinguishable messages."""
+        # Not in registry
+        o1 = await self.executor.execute_structured(
+            ExecutionRequest(tool_name="no_registry")
+        )
+        # Def exists, no callable
+        self.hippo.register_tool(
+            ToolDef(
+                name="no_callable",
+                description="",
+                parameters={"type": "object", "properties": {}},
+            )
+        )
+        o2 = await self.executor.execute_structured(
+            ExecutionRequest(tool_name="no_callable")
+        )
+        self.assertNotEqual(o1.error, o2.error)
+
+
+# ── 11. Per-request timeout override (shorter) ──
+
+
+class TestPerRequestTimeoutShort(unittest.IsolatedAsyncioTestCase):
+    """A short per-request timeout overrides the generous default."""
+
+    def setUp(self) -> None:
+        # Default timeout is generous (60s)
+        self.executor, self.hippo, _ = _make_executor(timeout_ms=60_000)
+
+        slow_def = ToolDef(
+            name="slow_tool",
+            description="Sleeps",
+            parameters={"type": "object", "properties": {}},
+        )
+        self.hippo.register_tool(slow_def)
+
+        async def _slow() -> str:
+            await asyncio.sleep(60)
+            return "done"
+
+        self.executor.register("slow_tool", _slow)
+
+    async def test_short_per_request_timeout_triggers(self) -> None:
+        outcome = await self.executor.execute_structured(
+            ExecutionRequest(
+                tool_name="slow_tool",
+                timeout_ms=100,  # 100ms override
+            )
+        )
+        self.assertEqual(outcome.status, ExecutionStatus.TIMEOUT)
+        self.assertEqual(outcome.error_category, ErrorCategory.TIMEOUT)
+
+
 if __name__ == "__main__":
     unittest.main()

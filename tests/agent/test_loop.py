@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unittest.mock
 from collections import deque
 from typing import Any
 
@@ -10,7 +11,7 @@ import pytest
 from localmelo.melo.agent import Agent
 from localmelo.melo.contracts.providers import BaseEmbeddingProvider, BaseLLMProvider
 from localmelo.melo.memory.coordinator import Hippo
-from localmelo.melo.schema import Message, ToolCall, ToolDef
+from localmelo.melo.schema import MAX_AGENT_STEPS, Message, ToolCall, ToolDef
 
 # ── Fake providers ──────────────────────────────────────────────────────────
 
@@ -346,6 +347,346 @@ class TestRetrievalSeparation:
         ]
         hints = hippo.extract_tool_hints(msgs)
         assert "shell_exec" in hints
+
+
+class TestMaxStepsTermination:
+    """Loop terminates cleanly when MAX_AGENT_STEPS is exhausted."""
+
+    @pytest.mark.asyncio
+    async def test_max_steps_sets_failed(self) -> None:
+        """Agent that always requests tool calls must hit the step limit."""
+        llm = FakeLLM()
+        # Queue enough tool-call responses to exhaust the step limit.
+        # We use a small limit via monkeypatching for speed.
+        for _ in range(MAX_AGENT_STEPS):
+            llm.enqueue(
+                Message(
+                    role="assistant",
+                    content="again",
+                    tool_call=ToolCall(tool_name="echo", arguments={"text": "x"}),
+                )
+            )
+        # No final-answer enqueued -- loop must exhaust.
+
+        agent = Agent(llm=llm, embedding=FakeEmbedding())
+        agent.hippo.register_tool(
+            ToolDef(
+                name="echo",
+                description="echo",
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+        agent.executor.register("echo", _echo_tool)
+
+        # Patch MAX_AGENT_STEPS to 3 for fast test
+        with unittest.mock.patch("localmelo.melo.agent.agent.MAX_AGENT_STEPS", 3):
+            result = await agent.run("loop forever")
+
+        assert result == "Max steps reached"
+        tasks = list(agent.hippo.history._tasks.values())
+        assert tasks[0].status == "failed"
+
+
+class TestNoEmbeddingToolLoop:
+    """Tool-call loop works correctly with embedding=None."""
+
+    @pytest.mark.asyncio
+    async def test_tool_loop_without_embedding(self) -> None:
+        """Full tool-call -> answer cycle with no embedding provider."""
+        llm = FakeLLM()
+        llm.enqueue(
+            Message(
+                role="assistant",
+                content="calling echo",
+                tool_call=ToolCall(tool_name="echo", arguments={"text": "hi"}),
+            )
+        )
+        llm.enqueue(Message(role="assistant", content="got it"))
+
+        agent = Agent(llm=llm, embedding=None)
+        agent.hippo.register_tool(
+            ToolDef(
+                name="echo",
+                description="echo",
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+        agent.executor.register("echo", _echo_tool)
+
+        result = await agent.run("echo hi")
+        assert result == "got it"
+
+        # Long-term memory must stay empty (no embedding).
+        assert len(agent.hippo.long._entries) == 0
+
+        # Short-term should contain the tool message.
+        short_contents = [m.content for m in agent.hippo.short.get_window()]
+        assert any("echo" in c and "hi" in c for c in short_contents)
+
+
+class TestPrePlanCheckFailure:
+    """Pre-plan check failure terminates the loop with clear status."""
+
+    @pytest.mark.asyncio
+    async def test_huge_context_blocks_plan(self) -> None:
+        """Context exceeding 100k chars triggers pre_plan rejection."""
+        llm = FakeLLM()
+        llm.enqueue(Message(role="assistant", content="should not reach"))
+
+        agent = Agent(llm=llm, embedding=FakeEmbedding())
+
+        # Inject a huge message into short-term to trigger pre_plan block.
+        agent.hippo.short.append(Message(role="system", content="x" * 110_000))
+
+        result = await agent.run("test")
+        assert "Plan check failed" in result
+        tasks = list(agent.hippo.history._tasks.values())
+        assert tasks[0].status == "failed"
+
+        # LLM should never have been called for planning.
+        assert len(llm.calls) == 0
+
+
+class TestSanitizedOutputInMemory:
+    """Executor result truncation flows correctly into step records."""
+
+    @pytest.mark.asyncio
+    async def test_truncated_output_in_step_record(self) -> None:
+        """When executor output exceeds MAX_OUTPUT_LEN, the ToolResult
+        stored in the step record uses the truncated (sanitized) version."""
+        llm = FakeLLM()
+        llm.enqueue(
+            Message(
+                role="assistant",
+                content="reading big file",
+                tool_call=ToolCall(tool_name="echo", arguments={"text": "a" * 60_000}),
+            )
+        )
+        llm.enqueue(Message(role="assistant", content="done"))
+
+        agent = Agent(llm=llm, embedding=FakeEmbedding())
+        agent.hippo.register_tool(
+            ToolDef(
+                name="echo",
+                description="echo",
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+        agent.executor.register("echo", _echo_tool)
+
+        result = await agent.run("big output")
+        assert result == "done"
+
+        # The step record must contain the truncated output, not the raw 60k.
+        tasks = list(agent.hippo.history._tasks.values())
+        steps = await agent.hippo.history.get_steps(tasks[0].task_id)
+        assert len(steps) == 1
+        tool_result = steps[0].tool_result
+        assert tool_result is not None
+        assert "[truncated]" in tool_result.output
+        assert len(tool_result.output) < 55_000
+        # Must not be the raw 60k output.
+        assert len(tool_result.output) < 60_000
+
+    @pytest.mark.asyncio
+    async def test_truncated_tool_msg_blocked_from_short_memory(self) -> None:
+        """When both executor truncation and memory-write check apply,
+        the oversized tool message is correctly blocked from short-term."""
+        llm = FakeLLM()
+        llm.enqueue(
+            Message(
+                role="assistant",
+                content="big read",
+                tool_call=ToolCall(tool_name="echo", arguments={"text": "b" * 60_000}),
+            )
+        )
+        llm.enqueue(Message(role="assistant", content="ok"))
+
+        agent = Agent(llm=llm, embedding=FakeEmbedding())
+        agent.hippo.register_tool(
+            ToolDef(
+                name="echo",
+                description="echo",
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+        agent.executor.register("echo", _echo_tool)
+
+        result = await agent.run("huge output test")
+        assert result == "ok"
+
+        # The truncated output (~50k) plus the "[echo] " prefix exceeds
+        # the memory-write limit, so no tool message in short-term.
+        tool_msgs = [m for m in agent.hippo.short.get_window() if m.role == "tool"]
+        assert len(tool_msgs) == 0
+
+
+class TestToolResultMemoryWriteBlocked:
+    """Tool result memory write is checked and can be blocked."""
+
+    @pytest.mark.asyncio
+    async def test_huge_tool_error_blocked(self) -> None:
+        """A tool returning a huge error string must not be written to
+        short-term memory if the memory-write check blocks it."""
+        llm = FakeLLM()
+        llm.enqueue(
+            Message(
+                role="assistant",
+                content="calling fail_tool",
+                tool_call=ToolCall(tool_name="fail_tool", arguments={}),
+            )
+        )
+        llm.enqueue(Message(role="assistant", content="handled"))
+
+        agent = Agent(llm=llm, embedding=FakeEmbedding())
+        agent.hippo.register_tool(
+            ToolDef(
+                name="fail_tool",
+                description="always fails with huge error",
+                parameters={"type": "object", "properties": {}},
+            )
+        )
+
+        async def _fail_tool() -> str:
+            raise RuntimeError("E" * 60_000)
+
+        agent.executor.register("fail_tool", _fail_tool)
+
+        result = await agent.run("do fail")
+        assert result == "handled"
+
+        # The huge error should be blocked from short-term memory by the
+        # memory-write checker (text > 50k chars).
+        tool_msgs = [
+            m
+            for m in agent.hippo.short.get_window()
+            if m.role == "tool" and "fail_tool" in m.content
+        ]
+        assert len(tool_msgs) == 0
+
+
+class TestDirectAnswerEdgeCases:
+    """Edge cases for the direct-answer (no tool_call) path."""
+
+    @pytest.mark.asyncio
+    async def test_empty_content_direct_answer(self) -> None:
+        """Direct answer with empty content still completes the task."""
+        agent = _make_agent(
+            [Message(role="assistant", content="")],
+            embedding=FakeEmbedding(),
+        )
+        result = await agent.run("hello")
+        assert result == ""
+        tasks = list(agent.hippo.history._tasks.values())
+        assert tasks[0].status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_task_saved_on_direct_answer(self) -> None:
+        """The task record is persisted after a direct answer."""
+        agent = _make_agent(
+            [Message(role="assistant", content="saved")],
+            embedding=FakeEmbedding(),
+        )
+        await agent.run("save test")
+        tasks = list(agent.hippo.history._tasks.values())
+        assert len(tasks) == 1
+        task = tasks[0]
+        assert task.status == "completed"
+        assert task.result == "saved"
+
+
+class TestMultiStepToolCalls:
+    """Agent handles multiple sequential tool calls before final answer."""
+
+    @pytest.mark.asyncio
+    async def test_two_tool_calls_then_answer(self) -> None:
+        """LLM calls tool twice, then gives final answer."""
+        llm = FakeLLM()
+        # Turn 1: first tool call
+        llm.enqueue(
+            Message(
+                role="assistant",
+                content="step 1",
+                tool_call=ToolCall(tool_name="echo", arguments={"text": "first"}),
+            )
+        )
+        # Turn 2: second tool call
+        llm.enqueue(
+            Message(
+                role="assistant",
+                content="step 2",
+                tool_call=ToolCall(tool_name="echo", arguments={"text": "second"}),
+            )
+        )
+        # Turn 3: final answer
+        llm.enqueue(Message(role="assistant", content="all done"))
+
+        agent = Agent(llm=llm, embedding=FakeEmbedding())
+        agent.hippo.register_tool(
+            ToolDef(
+                name="echo",
+                description="echo",
+                parameters={
+                    "type": "object",
+                    "properties": {"text": {"type": "string"}},
+                    "required": ["text"],
+                },
+            )
+        )
+        agent.executor.register("echo", _echo_tool)
+
+        result = await agent.run("multi step")
+        assert result == "all done"
+
+        # Should have 3 LLM calls total
+        assert len(llm.calls) == 3
+
+        # 2 steps recorded in history
+        tasks = list(agent.hippo.history._tasks.values())
+        steps = await agent.hippo.history.get_steps(tasks[0].task_id)
+        assert len(steps) == 2
+
+        # Both tool results should appear in the third LLM call's messages
+        third_call_msgs = llm.calls[2]["messages"]
+        tool_msgs = [m for m in third_call_msgs if m.role == "tool"]
+        assert len(tool_msgs) >= 2
+
+
+class TestPostPlanCheckFailure:
+    """Post-plan check failure terminates cleanly."""
+
+    @pytest.mark.asyncio
+    async def test_empty_tool_name_blocked(self) -> None:
+        """An LLM response with an empty tool_name is caught by post_plan."""
+        llm = FakeLLM()
+        llm.enqueue(
+            Message(
+                role="assistant",
+                content="bad response",
+                tool_call=ToolCall(tool_name="", arguments={}),
+            )
+        )
+        agent = Agent(llm=llm, embedding=FakeEmbedding())
+        result = await agent.run("test")
+        assert "Response check failed" in result
+        tasks = list(agent.hippo.history._tasks.values())
+        assert tasks[0].status == "failed"
 
 
 # ── Test helper ─────────────────────────────────────────────────────────────

@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from localmelo.melo.checker.payloads import (
     ExecutorRequest,
     ExecutorResultPayload,
@@ -12,6 +10,9 @@ from localmelo.melo.checker.payloads import (
     ValidationResult,
 )
 from localmelo.melo.checker.validators import (
+    _BLOCKED_RE,
+    BLOCKED_COMMANDS,  # noqa: F401 – re-exported for backward compat
+    MAX_OUTPUT_LEN,
     validate_executor_request,
     validate_executor_result,
     validate_gateway_ingress,
@@ -21,21 +22,10 @@ from localmelo.melo.checker.validators import (
 )
 from localmelo.melo.schema import CheckResult, Message, ToolCall, ToolDef, ToolResult
 
-BLOCKED_COMMANDS = [
-    r"\brm\s+-rf\s+/",
-    r"\bmkfs\b",
-    r"\bdd\s+if=",
-    r":(){.*};",
-    r"\bshutdown\b",
-    r"\breboot\b",
-]
-
-MAX_OUTPUT_LEN = 50_000
-
 
 class Checker:
     def __init__(self) -> None:
-        self._blocked = [re.compile(p) for p in BLOCKED_COMMANDS]
+        self._blocked = _BLOCKED_RE
 
     # ── v0.1 API (backward compatible) ──
 

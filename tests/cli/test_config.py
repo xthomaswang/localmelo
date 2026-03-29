@@ -245,6 +245,132 @@ class TestConfigValidation:
         cfg.validate_or_raise()  # should not raise
 
 
+# ── has_embedding property ──
+
+
+class TestHasEmbedding:
+    """has_embedding should reflect embedding availability per backend."""
+
+    def test_mlc_always_has_embedding(self) -> None:
+        """mlc-llm backend always includes a local embedding model."""
+        cfg = Config(backend="mlc-llm", mlc=MlcConfig(chat_model="Qwen3-1.7B"))
+        assert cfg.has_embedding is True
+
+    def test_ollama_with_embedding_model(self) -> None:
+        """ollama has embedding when embedding_model is set."""
+        cfg = Config(
+            backend="ollama",
+            ollama=OllamaConfig(
+                chat_url="http://localhost:11434",
+                chat_model="qwen3:8b",
+                embedding_model="nomic-embed",
+            ),
+        )
+        assert cfg.has_embedding is True
+
+    def test_ollama_without_embedding_model(self) -> None:
+        """ollama without embedding_model -> no embedding."""
+        cfg = Config(
+            backend="ollama",
+            ollama=OllamaConfig(
+                chat_url="http://localhost:11434",
+                chat_model="qwen3:8b",
+                embedding_model="",
+            ),
+        )
+        assert cfg.has_embedding is False
+
+    def test_online_with_local_embedding(self) -> None:
+        """online backend with local_embedding=True has embedding."""
+        cfg = Config(
+            backend="online",
+            online=OnlineConfig(
+                provider="openai",
+                api_key_env="OPENAI_API_KEY",
+                chat_model="gpt-4o",
+                local_embedding=True,
+            ),
+        )
+        assert cfg.has_embedding is True
+
+    def test_online_without_local_embedding(self) -> None:
+        """online backend with local_embedding=False has no embedding."""
+        cfg = Config(
+            backend="online",
+            online=OnlineConfig(
+                provider="openai",
+                api_key_env="OPENAI_API_KEY",
+                chat_model="gpt-4o",
+                local_embedding=False,
+            ),
+        )
+        assert cfg.has_embedding is False
+
+    def test_unknown_backend_no_embedding(self) -> None:
+        """Unknown/empty backend -> no embedding."""
+        cfg = Config(backend="")
+        assert cfg.has_embedding is False
+
+        cfg2 = Config(backend="some-unknown")
+        assert cfg2.has_embedding is False
+
+
+# ── Fail-fast config validation ──
+
+
+class TestFailFastValidation:
+    """validate() should catch all errors eagerly and validate_or_raise()
+    should raise ConfigError with all collected issues."""
+
+    def test_multiple_errors_collected(self) -> None:
+        """A backend with multiple issues should report all of them."""
+        cfg = Config(
+            backend="online",
+            online=OnlineConfig(provider="", api_key_env="", chat_model=""),
+        )
+        errors = cfg.validate()
+        # Should catch: missing provider, missing api_key_env, missing chat_model
+        assert len(errors) >= 3
+
+    def test_validate_or_raise_includes_all_errors(self) -> None:
+        """ConfigError message should contain all validation errors."""
+        cfg = Config(
+            backend="online",
+            online=OnlineConfig(provider="", api_key_env="", chat_model=""),
+        )
+        with pytest.raises(ConfigError) as exc_info:
+            cfg.validate_or_raise()
+        msg = str(exc_info.value)
+        assert "provider" in msg
+        assert "api_key_env" in msg
+        assert "chat_model" in msg
+
+    def test_empty_backend_returns_early(self) -> None:
+        """Empty backend should report just that one error and stop."""
+        cfg = Config(backend="")
+        errors = cfg.validate()
+        assert len(errors) == 1
+        assert "backend is not set" in errors[0]
+
+    def test_invalid_backend_returns_early(self) -> None:
+        """Invalid backend should report just that one error and stop."""
+        cfg = Config(backend="nope")
+        errors = cfg.validate()
+        assert len(errors) == 1
+        assert "invalid" in errors[0]
+
+    def test_valid_config_returns_no_errors(self) -> None:
+        """A fully valid config should produce zero errors."""
+        cfg = Config(
+            backend="mlc-llm",
+            mlc=MlcConfig(chat_model="Qwen3-1.7B", chat_port=8400),
+            gateway=GatewayConfig(port=8401, host="127.0.0.1"),
+        )
+        assert cfg.validate() == []
+        # validate_or_raise should not raise
+        cfg.validate_or_raise()
+
+
 # ── Provider factory ──
 
 

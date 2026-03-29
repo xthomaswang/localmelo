@@ -19,6 +19,7 @@ from localmelo.melo.schema import (
     Message,
     StepRecord,
     TaskRecord,
+    ToolDef,
     ToolResult,
 )
 
@@ -90,7 +91,7 @@ def _providers_from_config(
 class Agent:
     """Task-solving agent with tool use and memory.
 
-    Three construction modes:
+    Two construction modes:
 
     1. **Config-based** (gateway / full app)::
 
@@ -100,47 +101,22 @@ class Agent:
     2. **Direct provider injection** (testing / custom setups)::
 
         agent = Agent(llm=my_llm_provider, embedding=my_emb_provider)
-
-    3. **Legacy raw strings** (backward compat)::
-
-        agent = Agent(base_url="http://...", chat_model="...", embed_model="...")
     """
 
     def __init__(
         self,
-        # Config-based construction
         config: Config | None = None,
-        # Legacy raw-string construction (backward compat)
-        base_url: str | None = None,
-        chat_model: str | None = None,
-        embed_model: str | None = None,
         *,
-        # Direct provider injection
         llm: BaseLLMProvider | None = None,
         embedding: BaseEmbeddingProvider | None = None,
     ) -> None:
         if llm is not None:
             self._llm = llm
             self._embedding = embedding
-
         elif config is not None:
             self._llm, self._embedding = _providers_from_config(config)
-
         else:
-            from localmelo.melo.schema import CHAT_MODEL, EMBEDDING_MODEL, LLM_BASE_URL
-            from localmelo.support.providers.embedding.openai_compat import (
-                OpenAICompatEmbedding,
-            )
-            from localmelo.support.providers.llm.openai_compat import OpenAICompatLLM
-
-            self._llm = OpenAICompatLLM(
-                base_url=base_url or LLM_BASE_URL,
-                model=chat_model or CHAT_MODEL,
-            )
-            self._embedding = OpenAICompatEmbedding(
-                base_url=base_url or LLM_BASE_URL,
-                model=embed_model or EMBEDDING_MODEL,
-            )
+            raise TypeError("Agent requires either config= or llm= to be provided")
 
         # Optional persistent memory backends (env-based opt-in).
         # LOCALMELO_PERSIST_MEMORY=1 enables SQLite-backed history and long-term.
@@ -171,6 +147,141 @@ class Agent:
 
         register_builtins(self.executor, self.hippo)
 
+    # ── Stage helpers ──
+    # Each helper owns one phase of the agent loop.  They return a
+    # short status string when the loop should break, or None to
+    # continue to the next stage.
+
+    async def _do_retrieval(
+        self, query: str
+    ) -> tuple[list[Message], list[Message], list[ToolDef], str | None]:
+        """Stage 1+2: retrieve context, resolve tools, run boundary checks.
+
+        Returns (long_context, short_window, tools, fail_reason).
+        *fail_reason* is non-None when a check fails and the loop must break.
+        """
+        long_context = await self.hippo.retrieve_context(query)
+        short_window = self.hippo.short.get_window()
+
+        tool_hints = self.hippo.extract_tool_hints(long_context + short_window)
+        tools = self.hippo.resolve_tools(query, hints=tool_hints)
+
+        resolution_check = self.checker.check_tool_resolution(
+            ToolResolutionResult(
+                query=query,
+                hints=tool_hints,
+                resolved_tool_names=[t.name for t in tools],
+            )
+        )
+        if not resolution_check.allowed:
+            return (
+                long_context,
+                short_window,
+                tools,
+                (f"Tool resolution failed: {resolution_check.reason}"),
+            )
+
+        all_msgs = long_context + short_window
+        check = await self.checker.pre_plan(all_msgs)
+        if not check.allowed:
+            return (
+                long_context,
+                short_window,
+                tools,
+                (f"Plan check failed: {check.reason}"),
+            )
+
+        return long_context, short_window, tools, None
+
+    async def _do_plan(
+        self,
+        long_context: list[Message],
+        short_window: list[Message],
+        tools: list[ToolDef],
+        query: str,
+    ) -> tuple[Message, str | None]:
+        """Stage 3: LLM planning step with post-plan check.
+
+        Returns (response, fail_reason).
+        """
+        response = await self.chat.plan_step(
+            context=long_context,
+            short=short_window,
+            tools=tools,
+            query=query,
+        )
+
+        check = await self.checker.post_plan(response)
+        if not check.allowed:
+            return response, f"Response check failed: {check.reason}"
+
+        return response, None
+
+    async def _do_execute(self, response: Message) -> ToolResult:
+        """Stage 4: execute tool call and validate the result.
+
+        Uses the sanitized payload from the executor-result checker
+        when truncation or modification was applied; falls back to
+        the raw outcome otherwise.
+        """
+        assert response.tool_call is not None
+        exec_request = ExecutionRequest(
+            tool_name=response.tool_call.tool_name,
+            arguments=dict(response.tool_call.arguments),
+        )
+        outcome = await self.executor.execute_structured(exec_request)
+
+        exec_result_check = self.checker.check_executor_result(
+            ExecutorResultPayload(
+                tool_name=outcome.tool_name,
+                output=outcome.output,
+                error=outcome.error,
+                duration_ms=outcome.duration_ms,
+            )
+        )
+        if exec_result_check.sanitized_payload is not None:
+            sp = exec_result_check.sanitized_payload
+            return ToolResult(
+                tool_name=sp.tool_name,
+                output=sp.output,
+                error=sp.error,
+                duration_ms=sp.duration_ms,
+            )
+        return outcome.to_tool_result()
+
+    async def _do_memorize(
+        self, task_id: str, response: Message, result: ToolResult
+    ) -> None:
+        """Stage 5: record step and write checked results to memory."""
+        step = StepRecord(
+            thought=response.content,
+            tool_call=response.tool_call,
+            tool_result=result,
+        )
+        summary = await self.hippo.store_step(task_id, step)
+
+        # Checked write: step summary -> short + long memory
+        mem_check = self.checker.check_memory_write(
+            MemoryWritePayload(
+                text=summary,
+                role="assistant",
+                metadata={"step_id": step.step_id},
+            )
+        )
+        if mem_check.allowed:
+            await self.hippo.memorize(summary, metadata={"step_id": step.step_id})
+
+        # Checked write: tool result -> short memory
+        output = result.error if result.error else result.output
+        tool_msg = f"[{result.tool_name}] {output}"
+        tool_mem_check = self.checker.check_memory_write(
+            MemoryWritePayload(text=tool_msg, role="tool")
+        )
+        if tool_mem_check.allowed:
+            self.hippo.short.append(Message(role="tool", content=tool_msg))
+
+    # ── Main loop ──
+
     async def run(self, query: str) -> str:
         task = TaskRecord(query=query)
         await self.hippo.save_task(task)
@@ -178,119 +289,35 @@ class Agent:
         self.hippo.short.append(Message(role="user", content=query))
 
         for _ in range(MAX_AGENT_STEPS):
-            # ── Stage 1: Retrieval ──
-            # Long-term memory search (embedding similarity).
-            # Short-term window is fetched separately — never merged
-            # into retrieval results — to avoid injecting it twice
-            # when building the prompt.
-            long_context = await self.hippo.retrieve_context(query)
-            short_window = self.hippo.short.get_window()
+            # Retrieval + tool resolution + boundary checks
+            long_context, short_window, tools, fail = await self._do_retrieval(query)
+            if fail is not None:
+                task.status = "failed"
+                task.result = fail
+                break
 
-            # ── Stage 2: Tool resolution ──
-            # Extract tool hints from the combined context, then
-            # resolve full ToolDefs via BM25.  No tools are executed
-            # at this stage.
-            tool_hints = self.hippo.extract_tool_hints(long_context + short_window)
-            tools = self.hippo.resolve_tools(query, hints=tool_hints)
-
-            # ── Tool resolution check (v0.2) ──
-            resolution_check = self.checker.check_tool_resolution(
-                ToolResolutionResult(
-                    query=query,
-                    hints=tool_hints,
-                    resolved_tool_names=[t.name for t in tools],
-                )
+            # LLM planning step
+            response, fail = await self._do_plan(
+                long_context, short_window, tools, query
             )
-            if not resolution_check.allowed:
+            if fail is not None:
                 task.status = "failed"
-                task.result = f"Tool resolution failed: {resolution_check.reason}"
+                task.result = fail
                 break
 
-            # ── Pre-plan check ──
-            all_msgs = long_context + short_window
-            check = await self.checker.pre_plan(all_msgs)
-            if not check.allowed:
-                task.status = "failed"
-                task.result = f"Plan check failed: {check.reason}"
-                break
-
-            # ── Stage 3: Plan ──
-            # context and short are disjoint — no duplication.
-            response = await self.chat.plan_step(
-                context=long_context,
-                short=short_window,
-                tools=tools,
-                query=query,
-            )
-
-            # ── Post-plan check ──
-            check = await self.checker.post_plan(response)
-            if not check.allowed:
-                task.status = "failed"
-                task.result = f"Response check failed: {check.reason}"
-                break
-
-            # No tool call → final answer
+            # No tool call -> direct answer; loop terminates
             if response.tool_call is None:
                 task.status = "completed"
                 task.result = response.content
                 break
 
-            # ── Stage 4: Execute (structured, v0.2) ──
-            exec_request = ExecutionRequest(
-                tool_name=response.tool_call.tool_name,
-                arguments=dict(response.tool_call.arguments),
-            )
-            outcome = await self.executor.execute_structured(exec_request)
+            # Execute tool call and validate result
+            result = await self._do_execute(response)
 
-            # Validate executor result (v0.2)
-            exec_result_check = self.checker.check_executor_result(
-                ExecutorResultPayload(
-                    tool_name=outcome.tool_name,
-                    output=outcome.output,
-                    error=outcome.error,
-                    duration_ms=outcome.duration_ms,
-                )
-            )
-            if exec_result_check.sanitized_payload is not None:
-                sp = exec_result_check.sanitized_payload
-                result = ToolResult(
-                    tool_name=sp.tool_name,
-                    output=sp.output,
-                    error=sp.error,
-                    duration_ms=sp.duration_ms,
-                )
-            else:
-                result = outcome.to_tool_result()
-
-            # ── Stage 5: Store & memorize (checked via v0.2) ──
-            step = StepRecord(
-                thought=response.content,
-                tool_call=response.tool_call,
-                tool_result=result,
-            )
-            summary = await self.hippo.store_step(task.task_id, step)
-
-            # Checked write (v0.2): step summary → short + long memory
-            mem_check = self.checker.check_memory_write(
-                MemoryWritePayload(
-                    text=summary,
-                    role="assistant",
-                    metadata={"step_id": step.step_id},
-                )
-            )
-            if mem_check.allowed:
-                await self.hippo.memorize(summary, metadata={"step_id": step.step_id})
-
-            # Checked write (v0.2): tool result → short memory
-            output = result.error if result.error else result.output
-            tool_msg = f"[{result.tool_name}] {output}"
-            tool_mem_check = self.checker.check_memory_write(
-                MemoryWritePayload(text=tool_msg, role="tool")
-            )
-            if tool_mem_check.allowed:
-                self.hippo.short.append(Message(role="tool", content=tool_msg))
+            # Record step and write checked results to memory
+            await self._do_memorize(task.task_id, response, result)
         else:
+            # for-else: loop exhausted without break
             task.status = "failed"
             task.result = "Max steps reached"
 

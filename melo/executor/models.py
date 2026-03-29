@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from localmelo.melo.schema import ToolResult
 
 
-class ExecutionStatus(str, Enum):
+class ExecutionStatus(StrEnum):
     SUCCESS = "success"
     ERROR = "error"
     TIMEOUT = "timeout"
     BLOCKED = "blocked"
 
 
-class ErrorCategory(str, Enum):
+class ErrorCategory(StrEnum):
     NONE = "none"
     TOOL_NOT_FOUND = "tool_not_found"
     BLOCKED_BY_CHECKER = "blocked_by_checker"

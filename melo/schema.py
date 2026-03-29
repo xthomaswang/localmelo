@@ -7,14 +7,9 @@ from typing import Any
 
 # ── Config ──
 
-LLM_BASE_URL = "http://127.0.0.1:8400/v1"
-CHAT_MODEL = "qwen3-1.7b"
-EMBEDDING_MODEL = "qwen3-embedding"
-
 SHORT_TERM_MAX = 20
 LONG_TERM_TOP_K = 5
 TOOL_SEARCH_TOP_K = 3
-EMBEDDING_DIM = 896
 
 MAX_AGENT_STEPS = 30
 

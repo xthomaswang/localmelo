@@ -47,10 +47,7 @@ def _plist_xml(
     )
 
 
-def install(
-    port: int = 8401,
-    base_url: str | None = None,
-) -> str:
+def install(port: int = 8401) -> str:
     if sys.platform != "darwin":
         raise RuntimeError("daemon install only supported on macOS (launchd)")
 
@@ -60,8 +57,6 @@ def install(
 
     python = sys.executable
     module_args = ["localmelo", "--serve", "--port", str(port)]
-    if base_url:
-        module_args += ["--base-url", base_url]
 
     plist = _plist_xml(python, module_args, log_dir)
     with open(PLIST_PATH, "w") as f:

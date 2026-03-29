@@ -13,6 +13,7 @@ from localmelo.melo.checker import (
     ValidationResult,
 )
 from localmelo.melo.checker.validators import (
+    BLOCKED_COMMANDS,
     MAX_MEMORY_TEXT_LEN,
     MAX_OUTPUT_LEN,
     MAX_QUERY_LEN,
@@ -483,3 +484,108 @@ class TestBackwardCompatibility:
         assert not vr.allowed
         assert vr.reason == "denied"
         assert vr.sanitized_payload is None
+
+
+# ── Single source of truth for constants ──
+
+
+class TestConstantDeduplication:
+    """BLOCKED_COMMANDS and MAX_OUTPUT_LEN must be the same object
+    whether imported from checker.py or validators.py."""
+
+    def test_blocked_commands_single_source(self) -> None:
+        from localmelo.melo.checker.checker import (
+            BLOCKED_COMMANDS as CHECKER_BLOCKED,
+        )
+        from localmelo.melo.checker.validators import (
+            BLOCKED_COMMANDS as VALIDATORS_BLOCKED,
+        )
+
+        assert CHECKER_BLOCKED is VALIDATORS_BLOCKED
+
+    def test_max_output_len_single_source(self) -> None:
+        from localmelo.melo.checker.checker import (
+            MAX_OUTPUT_LEN as CHECKER_MAX,
+        )
+        from localmelo.melo.checker.validators import (
+            MAX_OUTPUT_LEN as VALIDATORS_MAX,
+        )
+
+        assert CHECKER_MAX is VALIDATORS_MAX
+
+    def test_blocked_re_single_source(self) -> None:
+        from localmelo.melo.checker.checker import (
+            _BLOCKED_RE as CHECKER_RE,
+        )
+        from localmelo.melo.checker.validators import (
+            _BLOCKED_RE as VALIDATORS_RE,
+        )
+
+        assert CHECKER_RE is VALIDATORS_RE
+
+    def test_blocked_commands_has_six_patterns(self) -> None:
+        assert len(BLOCKED_COMMANDS) == 6
+
+
+# ── All blocked commands via v0.2 validate_executor_request ──
+
+
+class TestAllBlockedCommandsV02:
+    """Every blocked pattern must be caught by validate_executor_request."""
+
+    DANGEROUS = [
+        ("rm -rf /home", "rm -rf"),
+        ("mkfs /dev/sda1", "mkfs"),
+        ("dd if=/dev/zero of=/dev/sda", "dd"),
+        (":(){:|:&};:", "fork bomb compact"),
+        (":() { :|:& };:", "fork bomb spaced"),
+        (":() { :|:& }; :", "fork bomb spaced trailing"),
+        ("shutdown -h now", "shutdown"),
+        ("reboot", "reboot"),
+    ]
+
+    @pytest.mark.parametrize(
+        "cmd,label",
+        DANGEROUS,
+        ids=[d[1] for d in DANGEROUS],
+    )
+    def test_v02_blocks(self, cmd: str, label: str) -> None:
+        req = ExecutorRequest(
+            tool_name="shell_exec",
+            arguments={"command": cmd},
+            tool_def_name="shell_exec",
+        )
+        result = validate_executor_request(req)
+        assert not result.allowed, f"{label!r} should be blocked"
+        assert "Blocked" in result.reason
+
+
+# ── All blocked commands via v0.1 pre_execute ──
+
+
+class TestAllBlockedCommandsV01:
+    """Every blocked pattern must be caught by checker.pre_execute."""
+
+    DANGEROUS = [
+        ("rm -rf /home", "rm -rf"),
+        ("mkfs /dev/sda1", "mkfs"),
+        ("dd if=/dev/zero of=/dev/sda", "dd"),
+        (":(){:|:&};:", "fork bomb compact"),
+        (":() { :|:& };:", "fork bomb spaced"),
+        (":() { :|:& }; :", "fork bomb spaced trailing"),
+        ("shutdown -h now", "shutdown"),
+        ("reboot", "reboot"),
+    ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "cmd,label",
+        DANGEROUS,
+        ids=[d[1] for d in DANGEROUS],
+    )
+    async def test_v01_blocks(self, checker: Checker, cmd: str, label: str) -> None:
+        td = ToolDef(name="shell_exec", description="", parameters={})
+        tc = ToolCall(tool_name="shell_exec", arguments={"command": cmd})
+        result = await checker.pre_execute(tc, td)
+        assert not result.allowed, f"{label!r} should be blocked"
+        assert "Blocked" in result.reason

@@ -1,4 +1,4 @@
-"""Boundary validators for Checker v0.2."""
+"""Boundary validators for the Checker."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ BLOCKED_COMMANDS = [
     r"\brm\s+-rf\s+/",
     r"\bmkfs\b",
     r"\bdd\s+if=",
-    r":(){.*};",
+    r":\(\)\s*\{.*\}\s*;",
     r"\bshutdown\b",
     r"\breboot\b",
 ]

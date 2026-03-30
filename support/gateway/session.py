@@ -47,30 +47,17 @@ class SessionManager:
         self,
         max_sessions: int = 50,
         idle_ttl: float = 3600.0,
-        # Config-based (preferred)
         config: Config | None = None,
-        # Legacy (backward compat)
-        base_url: str | None = None,
-        chat_model: str | None = None,
-        embed_model: str | None = None,
     ) -> None:
         self._sessions: dict[str, Session] = {}
         self._max = max_sessions
         self._idle_ttl = idle_ttl
         self._config = config
-        # legacy passthrough
-        self._base_url = base_url
-        self._chat_model = chat_model
-        self._embed_model = embed_model
 
     def _create_agent(self) -> AgentLike:
-        if self._config:
-            return Agent(config=self._config)
-        return Agent(
-            base_url=self._base_url,
-            chat_model=self._chat_model,
-            embed_model=self._embed_model,
-        )
+        if self._config is None:
+            raise RuntimeError("SessionManager requires a config to create agents")
+        return Agent(config=self._config)
 
     def get(self, session_id: str) -> Session | None:
         s = self._sessions.get(session_id)

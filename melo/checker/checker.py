@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 from localmelo.melo.checker.payloads import (
     ExecutorRequest,
     ExecutorResultPayload,
@@ -12,6 +10,9 @@ from localmelo.melo.checker.payloads import (
     ValidationResult,
 )
 from localmelo.melo.checker.validators import (
+    _BLOCKED_RE,
+    BLOCKED_COMMANDS,  # noqa: F401 – re-exported for tests
+    MAX_OUTPUT_LEN,  # noqa: F401 – re-exported for tests
     validate_executor_request,
     validate_executor_result,
     validate_gateway_ingress,
@@ -19,25 +20,12 @@ from localmelo.melo.checker.validators import (
     validate_session_transition,
     validate_tool_resolution,
 )
-from localmelo.melo.schema import CheckResult, Message, ToolCall, ToolDef, ToolResult
-
-BLOCKED_COMMANDS = [
-    r"\brm\s+-rf\s+/",
-    r"\bmkfs\b",
-    r"\bdd\s+if=",
-    r":(){.*};",
-    r"\bshutdown\b",
-    r"\breboot\b",
-]
-
-MAX_OUTPUT_LEN = 50_000
+from localmelo.melo.schema import CheckResult, Message, ToolCall, ToolDef
 
 
 class Checker:
     def __init__(self) -> None:
-        self._blocked = [re.compile(p) for p in BLOCKED_COMMANDS]
-
-    # ── v0.1 API (backward compatible) ──
+        self._blocked = _BLOCKED_RE
 
     # ── Core → Memory boundary ──
 
@@ -73,35 +61,7 @@ class Checker:
 
         return CheckResult(allowed=True)
 
-    # ── Executor → Core boundary ──
-
-    async def post_execute(
-        self, tool_call: ToolCall, result: ToolResult
-    ) -> CheckResult:
-        if len(result.output) > MAX_OUTPUT_LEN:
-            truncated = result.output[:MAX_OUTPUT_LEN] + "\n... [truncated]"
-            return CheckResult(
-                allowed=True,
-                reason="Output truncated",
-                modified_payload=ToolResult(
-                    tool_name=result.tool_name,
-                    output=truncated,
-                    error=result.error,
-                    duration_ms=result.duration_ms,
-                ),
-            )
-        return CheckResult(allowed=True)
-
-    # ── Memory write boundary ──
-
-    async def pre_memory_write(self, text: str) -> CheckResult:
-        if len(text) > MAX_OUTPUT_LEN:
-            return CheckResult(
-                allowed=False, reason=f"Memory write too large: {len(text)} chars"
-            )
-        return CheckResult(allowed=True)
-
-    # ── v0.2 API: Structured boundary validators ──
+    # ── Structured boundary validators ──
 
     def check_gateway_ingress(self, payload: GatewayIngressPayload) -> ValidationResult:
         return validate_gateway_ingress(payload)

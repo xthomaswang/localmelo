@@ -2,8 +2,24 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from typing import TYPE_CHECKING
 
 from localmelo.melo.agent import Agent
+
+if TYPE_CHECKING:
+    from localmelo.support.config import Config
+
+
+def _register_backends() -> None:
+    """Ensure built-in backend adapters are registered.
+
+    Delegates to :func:`~localmelo.support.backends.ensure_defaults_registered`
+    which is idempotent — safe to call multiple times and also called
+    automatically by :func:`get_backend` / :func:`list_backends`.
+    """
+    from localmelo.support.backends import ensure_defaults_registered
+
+    ensure_defaults_registered()
 
 
 async def _run(agent: Agent, query: str | None) -> None:
@@ -29,11 +45,12 @@ async def _run(agent: Agent, query: str | None) -> None:
 
 
 def main() -> None:
+    _register_backends()
+
     parser = argparse.ArgumentParser(prog="melo", description="localmelo agent")
     parser.add_argument("query", nargs="*", help="Task to execute (direct mode)")
     parser.add_argument("--base-url", default=None, help="LLM API base URL")
     parser.add_argument("--chat-model", default=None, help="Chat model name")
-    parser.add_argument("--embed-model", default=None, help="Embedding model name")
 
     # gateway mode
     parser.add_argument("--serve", action="store_true", help="Run as gateway server")
@@ -42,7 +59,7 @@ def main() -> None:
 
     # setup
     parser.add_argument(
-        "--reconfigure", action="store_true", help="Re-run setup wizard"
+        "--reconfigure", action="store_true", help="Re-run backend setup"
     )
     parser.add_argument(
         "--daemon",
@@ -60,8 +77,6 @@ def main() -> None:
             kwargs: dict = {}
             if args.port is not None:
                 kwargs["port"] = args.port
-            if args.base_url is not None:
-                kwargs["base_url"] = args.base_url
             path = daemon.install(**kwargs)
             print(f"Daemon installed: {path}")
         elif args.daemon == "uninstall":
@@ -78,25 +93,21 @@ def main() -> None:
     # direct mode (no gateway, original behavior)
     if args.query and not args.serve:
         query = " ".join(args.query)
-        agent = Agent(
-            base_url=args.base_url,
-            chat_model=args.chat_model,
-            embed_model=args.embed_model,
-        )
+        agent = _build_direct_mode_agent(args)
         asyncio.run(_run(agent, query))
         return
 
     # gateway mode: load or create config
     from localmelo.support import config
-    from localmelo.support.onboard import run_wizard
+    from localmelo.support.onboard import run_backend_setup
 
     cfg = config.load()
 
     if args.reconfigure or not cfg.is_configured:
-        wizard_cfg = run_wizard()
-        if wizard_cfg is None:
+        setup_cfg = run_backend_setup()
+        if setup_cfg is None:
             return
-        cfg = wizard_cfg
+        cfg = setup_cfg
 
     # apply CLI overrides
     if args.host is not None:
@@ -113,11 +124,52 @@ def main() -> None:
         print(f"\n  {e}\n", file=__import__("sys").stderr)
         raise SystemExit(1) from e
 
-    # start gateway (with LLM subprocess)
+    # start gateway
+    _start_gateway(cfg)
+
+
+def _build_direct_mode_agent(args: argparse.Namespace) -> Agent:
+    """Build an Agent for direct CLI mode from CLI flags.
+
+    Two cases:
+    1. --base-url provided: generic OpenAI-compatible endpoint injection,
+       no embedding (preserves the exact URL as given).
+    2. No --base-url: use configured backends from the config file.
+    """
+    base_url = args.base_url
+
+    if base_url:
+        # Generic OpenAI-compatible endpoint — no embedding in direct mode
+        from localmelo.support.providers.llm.openai_compat import OpenAICompatLLM
+
+        model = args.chat_model or "default"
+        llm = OpenAICompatLLM(base_url=base_url, model=model)
+        return Agent(llm=llm, embedding=None)
+
+    # No --base-url: use configured backends from config file
+    from localmelo.support import config
+
+    cfg = config.load()
+    if not cfg.is_configured:
+        import sys
+
+        print(
+            "No backend configured. Run 'melo --serve --reconfigure' to set up,\n"
+            "or use --base-url to connect to an OpenAI-compatible endpoint.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
+    return Agent(config=cfg)
+
+
+def _start_gateway(cfg: Config) -> None:
+    """Thin seam for gateway startup — keeps the lazy import local."""
     from localmelo.support.gateway import start_gateway
 
     print("\n  Starting localmelo gateway ...")
-    print(f"  Backend: {cfg.backend}")
+    print(f"  Chat: {cfg.chat_backend}")
+    print(f"  Embedding: {cfg.embedding_backend}")
     print(f"  Gateway: http://{cfg.gateway.host}:{cfg.gateway.port}")
     print(f"  Web UI:  http://{cfg.gateway.host}:{cfg.gateway.port}/")
     print()

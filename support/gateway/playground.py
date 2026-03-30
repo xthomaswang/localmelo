@@ -14,10 +14,14 @@ import httpx
 
 from localmelo.melo.agent import Agent
 from localmelo.melo.contracts.providers import BaseEmbeddingProvider, BaseLLMProvider
+from localmelo.melo.memory.history.sqlite import SqliteHistory
+from localmelo.melo.memory.long.sqlite import SqliteLongTerm
 from localmelo.support.backends.openai_compat import normalize_url
 from localmelo.support.providers.embedding.openai_compat import OpenAICompatEmbedding
 from localmelo.support.providers.llm.ollama_chat import OllamaNativeChat
 from localmelo.support.providers.llm.openai_compat import OpenAICompatLLM
+
+_DEFAULT_MEMORY_DIR = Path("~/.cache/localmelo/playground").expanduser()
 
 _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL | re.IGNORECASE)
 _SCENARIOS_PATH = (
@@ -126,12 +130,23 @@ class PlaygroundSession:
 
 
 class SmokePlayground:
-    def __init__(self, max_sessions: int = 12, idle_ttl: float = 7200.0) -> None:
+    def __init__(
+        self,
+        max_sessions: int = 12,
+        idle_ttl: float = 7200.0,
+        memory_dir: Path | str | None = None,
+    ) -> None:
         self._sessions: dict[str, PlaygroundSession] = {}
         self._max = max_sessions
         self._idle_ttl = idle_ttl
         self._scenarios = _load_scenarios()
         self._scenario_map = {sc["id"]: sc for sc in self._scenarios}
+
+        # Shared SQLite memory backends — all sessions read/write the same store
+        mem_dir = Path(memory_dir) if memory_dir else _DEFAULT_MEMORY_DIR
+        mem_dir.mkdir(parents=True, exist_ok=True)
+        self._shared_history = SqliteHistory(str(mem_dir / "history.db"))
+        self._shared_long_term = SqliteLongTerm(str(mem_dir / "long_term.db"))
 
     def scenarios_payload(self) -> list[dict[str, Any]]:
         payload: list[dict[str, Any]] = []
@@ -201,6 +216,11 @@ class SmokePlayground:
         llm = self._build_llm_provider(detected, chat_url, chat_model)
         embedding = self._build_embedding_provider(embedding_url, embedding_model)
         agent = Agent(llm=llm, embedding=embedding)
+
+        # Inject shared SQLite backends so all sessions share one memory store
+        agent.hippo.history = self._shared_history
+        if embedding:
+            agent.hippo.long = self._shared_long_term
 
         scenario_summary = None
         if scenario_id == "__all__":

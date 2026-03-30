@@ -549,7 +549,7 @@ discoverBtn.addEventListener('click',discover);
 createBtn.addEventListener('click',createSession);
 sendBtn.addEventListener('click',send);
 stopBtn.addEventListener('click',stopSending);
-inputEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send()}});
+inputEl.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send()}});
 inputEl.addEventListener('input',()=>{autoResize();syncUI()});
 memoryEl.addEventListener('change',()=>{renderMemoryPreview();saveCfg()});
 [adapterEl,chatUrlEl,embedUrlEl,chatModelEl,embedModelEl].forEach(el=>el.addEventListener('change',saveCfg));

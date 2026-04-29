@@ -1,398 +1,199 @@
 <p align="center">
-  <img src="docs/assets/melo.png" alt="Melo" width="280">
+  <img src="docs/assets/melo.png" alt="Melo" width="240">
 </p>
 
 # localmelo
 
 [English](./README.md) | [简体中文](./README.zh-CN.md)
 
-`localmelo` is a local-first agent runtime focused on explicit memory layers,
-tool use, and a future sleep-time personalization workflow. The core connects to
-configured local backends and cloud backends via their endpoints — it does not
-host or manage local runtimes itself.
+`localmelo` is a local-first agent runtime for explicit memory, checked tool use,
+and user-managed model backends. It is designed to keep the core agent loop
+separate from infrastructure so local and cloud backends can be configured
+without changing runtime behavior.
 
-The project is being built in public. The architecture is in place, the codebase
-is being organized, and core interfaces are being stabilized, but the full
-product vision is not implemented yet.
+**Status:** pre-alpha. The online core loop is usable for development and smoke
+testing, but public APIs, memory policy, and personalization workflows are still
+evolving.
 
-**[Docs](https://localmelo.github.io/localmelo/)** | **[Quickstart](https://localmelo.github.io/localmelo/quickstart.html)** | **[Architecture](https://localmelo.github.io/localmelo/architecture.html)** | **[Updates](https://localmelo.github.io/localmelo/updates.html)**
+**[Docs](https://localmelo.github.io/localmelo/index.html)** |
+**[Quickstart](https://localmelo.github.io/localmelo/quickstart.html)** |
+**[Architecture](https://localmelo.github.io/localmelo/architecture.html)** |
+**[Updates](https://localmelo.github.io/localmelo/updates.html)**
 
-## Status
+## What It Does
 
-**Pre-alpha / work in progress**
+localmelo provides:
 
-This repository should currently be read as:
+- an online agent loop with planning, tool execution, reflection, and memory writeback
+- explicit memory layers for working context, history, long-term retrieval, and tool lookup
+- checker boundaries for ingress, planning, execution, output size, and memory writes
+- backend connectors for local and cloud model providers
+- gateway mode for HTTP sessions around the same runtime
+- scaffolding for a later sleep-time personalization pipeline
 
-- an evolving agent runtime
-- a clean project structure for future development
-- a foundation for local deployment, memory, and personalization experiments
+It does not manage local model runtimes. Start Ollama, MLC, vLLM, SGLang, or other
+local services yourself, then point localmelo at the configured endpoint.
 
-It should **not** yet be treated as:
+## Current Maturity
 
-- a production-ready agent framework
-- a stable public API
-- a finished personalization or memory system
+Ready to verify:
 
-Expect breaking changes while the project is being shaped.
+- direct CLI mode
+- gateway mode
+- backend registry and provider construction
+- built-in tool execution with workspace policy
+- async SQLite history and long-term memory persistence
+- focused tests and smoke checks
 
-## Vision
+Still experimental:
 
-The long-term goal of `localmelo` is to provide a local agent stack with:
+- long-memory retrieval and promotion policy
+- product-level deployment shell
+- sleep-time training, evaluation, and personalization
+- stable public API guarantees
 
-- a core runtime separated from deployment and infrastructure concerns
-- multiple memory layers with different responsibilities
-- explicit support for local model backends
-- a sleep-time pipeline for future personalization and offline consolidation
+## Quickstart
 
-The intended model is:
-
-- `working memory` for active session context
-- `long memory` for slower, selective retrieval
-- `history` for append-only records
-- `personalized memory` for future training signals
-- `sleep mode` for preprocessing, training, evaluation, and state tracking
-
-## Current Scope
-
-What exists today:
-
-- a split architecture between `melo/` and `support/`
-- agent, memory, checker, and executor modules
-- provider contracts and OpenAI-compatible provider implementations
-- backend adapter registry with local and cloud vendor backends
-- gateway infrastructure
-- persistent config and onboarding helpers
-- scaffolding for sleep-time preprocessing, training, evaluation, and state
-- test coverage around the current architecture and integration points
-
-What is intentionally still incomplete:
-
-- a complete end-to-end sleep mode workflow
-- a finished personalization training pipeline
-- stable long-memory promotion and retrieval policies
-- production-grade developer documentation and examples
-- finalized external APIs
-
-## Architecture
-
-> **Design rule:** `melo/` is the core agent layer. `support/` is the infrastructure
-> layer. `melo/` never depends on `support/` implementations directly.
-
-```text
-localmelo/
-  melo/       # core runtime: agent, memory, checker, executor, sleep
-  support/    # infrastructure: backends, providers, gateway, config
-  tests/      # regression and integration tests
-```
-
----
-
-**[Architecture docs](https://localmelo.github.io/localmelo/architecture.html)** — runtime split, checker boundaries, component details, and interactive diagram
-
-<details>
-<summary><b>Agent / Planner</b> — main loop, chat planning, orchestration</summary>
-
-<br>
-
-The agent runs a multi-stage loop per task:
-
-1. **Retrieval** — fetch long-term context via embedding search + short-term window
-2. **Tool Resolution** — extract tool hints from messages, resolve via BM25 + exact lookup
-3. **Planning** — LLM generates a thought and optional tool call
-4. **Execution** — executor runs the tool with timeout and workspace policy
-5. **Memorization** — store step in history, memorize to short + long memory
-
-The checker validates boundaries at stages 2–5. If any check fails, the agent replans.
-
-Key files: `melo/agent/agent.py` · `melo/agent/_chat.py`
-
-</details>
-
-<details>
-<summary><b>Memory</b> — short · long · history · personalized · tools</summary>
-
-<br>
-
-Four-layer memory architecture coordinated by **Hippo**:
-
-| Layer | Purpose | Backend |
-|---|---|---|
-| **Short-term** | Fixed-size rolling window (default 20) | In-memory deque |
-| **Long-term** | Embedding-based semantic search | SQLite (optional) |
-| **History** | Append-only task / step records | SQLite (optional) |
-| **Tool Registry** | BM25 semantic index + exact name lookup | In-memory |
-
-The coordinator provides: `retrieve_context()`, `resolve_tools()`, `memorize()`, `store_step()`.
-
-Key files: `melo/memory/coordinator.py` · `melo/memory/long/sqlite.py` · `melo/memory/history/sqlite.py`
-
-</details>
-
-<details>
-<summary><b>Executor</b> — tools, builtins, workspace policy</summary>
-
-<br>
-
-Structured execution pipeline:
-
-1. Registry lookup (authoritative tool definition)
-2. Pre-execute check (checker boundary)
-3. Callable resolution
-4. Workspace policy enforcement (file path restrictions)
-5. Timeout + exception handling (60s default)
-6. Artifact collection (metadata about created / read files)
-
-Returns `ExecutionOutcome` with: status, error category, duration, artifacts.
-
-Key files: `melo/executor/executor.py` · `melo/executor/builtins.py` · `melo/executor/policy.py`
-
-</details>
-
-<details>
-<summary><b>Checker</b> — validation guard across all boundaries</summary>
-
-<br>
-
-Multi-boundary validation at every stage:
-
-| Boundary | What it checks |
-|---|---|
-| **Gateway → Agent** | Request validation, ingress safety |
-| **Agent → Memory** | Memory write size limits |
-| **Agent → Executor** | Blocked commands (`rm -rf`, `mkfs`, fork bombs) |
-| **Executor → Agent** | Output truncation (50 KB limit) |
-| **Agent planning** | Prompt size, tool name validation |
-
-When any check fails, a `CheckResult(allowed=False, reason=...)` is returned and the agent replans.
-
-Key files: `melo/checker/checker.py` · `melo/checker/validators.py` · `melo/checker/payloads.py`
-
-</details>
-
-<details>
-<summary><b>Sleep</b> — offline personalization pipeline</summary>
-
-<br>
-
-Designed for continuous fine-tuning of the agent's embedding and personalization
-stack during idle time.
-
-**Purpose:**
-- Improve personalization over time
-- Strengthen procedural memory
-- Not part of the online request path
-
-**Stages:** preprocess → training → evaluation → state → promotion
-
-See the [Sleep Module diagram](#localmelo-sleep-module) below for the full workflow.
-
-Key files: `melo/sleep/preprocess/` · `melo/sleep/training/` · `melo/sleep/evaluation/` · `melo/sleep/state/`
-
-</details>
-
-<details>
-<summary><b>Support / Infrastructure</b> — backends, providers, gateway, config</summary>
-
-<br>
-
-| Module | Role |
-|---|---|
-| `backends/` | Backend adapter registry and implementations (local + cloud) |
-| `providers/` | Concrete LLM and embedding implementations (OpenAI-compatible) |
-| `gateway/` | HTTP gateway, session management, webapp |
-| `config.py` | Persistent TOML config at `~/.cache/localmelo/config.toml` |
-| `onboard.py` | Setup wizard and onboarding flow |
-
-**Supported backends:**
-
-| Backend | Type | Description |
-|---|---|---|
-| `ollama` | local | Ollama-compatible server |
-| `mlc` | local | MLC-LLM server |
-| `vllm` | local | vLLM server |
-| `sglang` | local | SGLang server |
-| `openai` | cloud | OpenAI API |
-| `gemini` | cloud | Google Gemini API |
-| `anthropic` | cloud | Anthropic API |
-| `nvidia` | cloud | NVIDIA API |
-
-Local backends run as external processes managed by the user; localmelo connects
-to them via a configured URL. Cloud backends connect to vendor APIs directly.
-
-Backend-specific logic (validation, provider construction) lives in
-`support/backends/`. The app layer dispatches via a registry -- no hardcoded backend branching.
-
-> **Future:** a separate repository for local backend deployment and runtime
-> management is being considered, but it is not part of localmelo core yet.
-
-</details>
-
----
-
-### localmelo Sleep Module
-
-> *offline / idle time — not in the online request path*
-
-```mermaid
-%%{init: {'theme': 'neutral'}}%%
-flowchart LR
-    subgraph sources["data sources"]
-        H["History"]
-        PM["Personalized\nMemory"]
-    end
-
-    subgraph pipeline["sleep pipeline — runs during idle time"]
-        PP["Preprocess\nclean · filter · select\nsynthetic data · split"]
-        TR["Training\nembedding fine-tuning\nlightweight adaptation"]
-        EV["Evaluation\npersonalization gain\nprocedural memory\nsafety check"]
-        ST["State\nstage tracking\nartifact versions\napproval status"]
-    end
-
-    subgraph output["promoted updates"]
-        UP["Embedding /\nPersonalization\nUpdate"]
-    end
-
-    H --> PP
-    PM --> PP
-    PP --> TR
-    TR --> EV
-    EV --> ST
-
-    ST -->|approved| UP
-    EV -.->|failed| PP
-    EV -.->|retry| TR
-
-    UP -.-> IMP["Improved\nPersonalization"]
-    UP -.-> PROC["Stronger\nProcedural\nMemory"]
-
-    classDef result fill:#f0fdf4,stroke:#86efac
-    class IMP,PROC result
-```
-
-> The sleep module is intended for **continuous embedding and personalization
-> fine-tuning** during user idle periods. Its purpose is to improve
-> personalization and strengthen procedural memory over time, without affecting
-> the online agent loop.
-
-<details>
-<summary><b>Sleep stages explained</b></summary>
-
-<br>
-
-| Stage | What happens |
-|---|---|
-| **Preprocess** | Data cleaning, filtering, sample selection, synthetic data generation, train/eval split |
-| **Training** | Continuous embedding fine-tuning, lightweight adaptation, personalization updates |
-| **Evaluation** | Measure personalization gain, procedural memory improvement, check for safety/quality regression |
-| **State** | Track current sleep stage, artifact versions, evaluation status, approved/rejected decisions |
-| **Promotion** | Only approved updates are promoted back into the agent system |
-
-On evaluation failure, the pipeline feeds back to preprocess or training for retry.
-Rejected updates are never promoted.
-
-</details>
-
----
-
-## Getting Started
-
-### Requirements
+Requirements:
 
 - Python 3.11+
+- a configured chat backend such as Ollama, MLC, vLLM, SGLang, or a supported cloud provider
 
-### Install
+Install from the repository root:
 
 ```bash
 pip install -e ".[dev,gateway]"
 ```
 
-### Run
-
-Direct mode:
+Configure providers:
 
 ```bash
-melo "hello"
+melo --reconfigure
 ```
 
-Gateway mode:
+Run one direct query:
+
+```bash
+melo "What is 6*7?"
+```
+
+Run the gateway:
 
 ```bash
 melo --serve
 ```
 
-### Test
+Call the gateway:
 
 ```bash
-pytest
+curl http://127.0.0.1:8401/v1/health
+
+curl -X POST http://127.0.0.1:8401/v1/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{"query":"Say hello briefly"}'
 ```
 
-### Verify
+See the [Quickstart](https://localmelo.github.io/localmelo/quickstart.html) for
+gateway smoke checks, session reuse, no-embedding mode, and backend-specific
+verification.
 
-After install + `melo --reconfigure`, run the
-**[Quickstart smoke checks](https://localmelo.github.io/localmelo/quickstart.html)**
-to confirm direct CLI mode, gateway mode, session reuse, and your chosen
-backend each work end-to-end.
+## Architecture
 
-## Development Notes
+The main design rule is:
 
-The project is currently architecture-first.
+> `melo/` owns runtime behavior and contracts. `support/` owns infrastructure.
+> Core runtime code should not import infrastructure implementations directly.
 
-That means the priority right now is:
+```text
+localmelo/
+  melo/       # agent, memory, checker, executor, sleep scaffolding
+  support/    # backends, providers, gateway, config, onboarding
+  tests/      # regression, integration, and smoke coverage
+  docs/       # static documentation site
+```
 
-- cleaning boundaries between runtime and infrastructure
-- stabilizing contracts and internal data flow
-- building the memory and sleep-mode foundations
-- improving test coverage before feature expansion
+Core modules:
 
-If you are reading this early, the repository may look "more organized than
-feature-complete" on purpose.
+| Area | Responsibility |
+|---|---|
+| Agent | Retrieval, planning, tool calls, reflection, final answers |
+| Memory | Working memory, history, long-term storage, tool registry |
+| Checker | Structured validation across runtime boundaries |
+| Executor | Built-in tool execution with timeout and workspace policy |
+| Support | Backend registry, provider implementations, config, gateway |
 
-## Roadmap
+For the full runtime map, see the
+[Architecture docs](https://localmelo.github.io/localmelo/architecture.html).
 
-Near-term:
+## Safety Boundaries
 
-- finish the first usable local agent loop
-- expand memory-layer behavior beyond scaffolding
-- wire sleep-mode preprocessing into actual runtime flows
-- improve backend configuration UX
+localmelo treats checks as runtime control flow. Requests, plans, tool calls,
+executor results, and memory writes are validated before they cross major
+boundaries.
 
-Mid-term:
+Current safeguards include:
 
-- add real sleep-time dataset preparation
-- add adapter-based personalization experiments
-- define a clearer long-memory retrieval and promotion policy
-- add examples and documentation for backend configuration
+- workspace policy for file operations
+- blocked shell command patterns
+- output size limits
+- prompt and memory write size limits
+- provider probing during onboarding
 
-Long-term:
+This is still pre-alpha software. Review configuration and tool permissions
+before giving it access to important files, accounts, or long-running processes.
 
-- support stable local-first agent workflows
-- support explicit memory consolidation
-- support optional user-specific personalization during offline periods
-- explore a separate local backend deployment / runtime management layer
+## Backends
 
-## Updates
+Supported backend families:
 
-See the full **[Updates](https://localmelo.github.io/localmelo/updates.html)**
-page for detailed progress on each development track, with English/Chinese
-toggle.
+| Backend | Type | Notes |
+|---|---|---|
+| `ollama` | local | User-managed Ollama server |
+| `mlc` | local | User-managed MLC endpoint |
+| `vllm` | local | User-managed vLLM endpoint |
+| `sglang` | local | User-managed SGLang endpoint |
+| `openai` | cloud | OpenAI API |
+| `anthropic` | cloud | Anthropic API |
+| `gemini` | cloud | Google Gemini API |
+| `nvidia` | cloud | NVIDIA API |
 
-Until the project reaches a more stable phase, updates will be incremental,
-architecture-heavy, and sometimes breaking.
+Chat and embedding backends are configured separately. Set the embedding backend
+to `none` when you do not want to run embedding retrieval.
+
+## Development
+
+Install development dependencies:
+
+```bash
+pip install -e ".[dev,gateway]"
+```
+
+Run focused checks:
+
+```bash
+python -m pytest tests/agent tests/checker tests/executor \
+                 tests/cli tests/memory tests/integration -q
+python -m pytest tests/gateway -q
+python -m ruff check .
+```
+
+Run the full suite before merging:
+
+```bash
+python -m pytest tests/ -q
+```
+
+Development priorities are tracked in
+[Updates](https://localmelo.github.io/localmelo/updates.html) and GitHub issues.
 
 ## Contributing
 
-Contributions, issues, and feedback are welcome, but please keep in mind:
+Issues and pull requests are welcome. Because the project is still pre-alpha,
+small focused changes are easier to review than broad feature drops.
 
-- the project is still changing quickly
-- some modules are scaffolding for future work
-- naming, APIs, and boundaries may still move
+Please keep changes aligned with the runtime/infrastructure boundary:
 
-If you open a PR, smaller and focused changes will be easier to review than
-large feature drops.
-
-## Project Maturity
-
-If you are evaluating `localmelo` today, the best description is:
-
-**a serious early-stage codebase with clear direction, but not a finished agent
-framework yet.**
+- put core agent behavior in `melo/`
+- put backend, gateway, config, and onboarding implementation in `support/`
+- preserve checker-based control flow for safety boundaries
+- add tests for behavior that changes public commands, storage, tool execution, or provider contracts

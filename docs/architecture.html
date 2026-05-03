@@ -33,7 +33,8 @@
     <aside class="sidebar" aria-label="Architecture sections">
       <h2>Architecture</h2>
       <a class="active" href="#overview">Overview</a>
-      <a href="#diagram">Diagram</a>
+      <a href="#diagram">Overall diagram</a>
+      <a href="#memory-subgraph">Memory subgraph</a>
       <a href="#boundaries">Boundaries</a>
       <a href="#status">Status</a>
     </aside>
@@ -45,7 +46,8 @@
         <p class="lead">
           localmelo is organized around one rule: <code>melo/</code> contains the
           agent runtime and contracts; <code>support/</code> contains config,
-          backends, providers, onboarding, and gateway infrastructure.
+          backends, providers, onboarding, and gateway infrastructure. Track 2
+          keeps online working context separate from Hippo's durable memory routing.
         </p>
         <div class="doc-meta">
           <span class="tag stable">online loop verified</span>
@@ -57,12 +59,13 @@
       <section class="section" id="diagram">
         <div class="diagram-intro">
           <div>
-            <h2>Runtime map</h2>
+            <h2>Overall diagram</h2>
             <p>
               The diagram shows the online path from user ingress to final answer,
               plus the offline sleep pipeline that is intentionally still a future
-              personalization track. Click a component to inspect responsibilities
-              and important files.
+              personalization track. Memory is shown as a Track 2 session boundary:
+              the agent-facing cache stays fast while Hippo routes durable writes.
+              Click a component to inspect responsibilities and important files.
             </p>
           </div>
           <div class="callout">
@@ -108,7 +111,7 @@
               <span class="badge store">store</span>
               <span class="badge consumer">model consumer</span>
               <div class="node-title">Memory</div>
-              <div class="node-sub">working · long · history<br>personalized · tools</div>
+              <div class="node-sub">working + Hippo branches<br>history stays raw</div>
             </div>
 
             <div class="node" id="n-executor" data-id="executor" style="left:612px;top:280px;width:185px">
@@ -164,6 +167,83 @@
           <div class="legend-item"><div class="legend-box"></div>checker boundary</div>
           <div class="legend-item"><div class="legend-line fail-l"></div>fail to replan</div>
         </div>
+
+        <div class="subdiagram" id="memory-subgraph">
+          <div class="subdiagram-heading">
+            <div>
+              <p class="eyebrow">Track 2 / Memory Session</p>
+              <h3>Memory subgraph</h3>
+            </div>
+            <p>
+              When the agent decides a candidate is worth remembering, v1 keeps the
+              agent-side decision as a bool and sends the same candidate to two
+              branches: <code>working</code> for active context and <code>Hippo</code>
+              for durable or specialized placement. Long-term writes wait for a
+              rehearsed working-memory signal or another strong write signal.
+            </p>
+          </div>
+
+          <div class="memory-flow" role="img" aria-label="Track 2 memory session subgraph">
+            <div class="memory-lane online">
+              <span class="lane-label">online session</span>
+              <div class="flow-node source">
+                <span class="badge planner">agent</span>
+                <strong>Remembered candidate</strong>
+                <span>bool=true proposal, not a storage decision</span>
+              </div>
+              <div class="flow-split">
+                <div class="flow-node active">
+                  <span class="badge store">working</span>
+                  <strong>Working memory</strong>
+                  <span>short-lived active cache with LRU-style refresh; only rehearsed memories can become long-term candidates</span>
+                </div>
+                <div class="flow-node router">
+                  <span class="badge store">hippo</span>
+                  <strong>Hippo router</strong>
+                  <span>chooses NEW, UPDATE, RELATED, CONFLICT, or IGNORE; long-term writes await rehearsal</span>
+                </div>
+              </div>
+              <div class="promotion-gate">promotion gate: fresh -> rehearsed before long-term persistence</div>
+            </div>
+
+            <div class="memory-lane durable">
+              <span class="lane-label">durable and specialized memory</span>
+              <div class="store-grid">
+                <div class="store-node">
+                  <strong>Long / Profile</strong>
+                  <span>one physical long store in v1; semantic, episodic, profile, and reflection metadata kinds</span>
+                </div>
+                <div class="store-node">
+                  <strong>Tools</strong>
+                  <span>authoritative registry plus procedural skill/template memory; no checker bypass</span>
+                </div>
+                <div class="store-node">
+                  <strong>Personalized</strong>
+                  <span>filtered sleep samples for Track 4, not raw runtime history</span>
+                </div>
+                <div class="store-node history-node">
+                  <strong>History</strong>
+                  <span>append-only task and step records for debugging, audit, replay, and provenance only</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-grid">
+            <article>
+              <h4>Working branch</h4>
+              <p>Reused active memories are touched or compacted so the current task context stays bounded and fresh. Only rehearsed memories can become long-term candidates.</p>
+            </article>
+            <article>
+              <h4>Hippo branch</h4>
+              <p>Hippo owns classification, metadata, provenance, relation links, conflict handling, and whether a write is immediate or deferred to sleep.</p>
+            </article>
+            <article>
+              <h4>Extensible shape</h4>
+              <p>The same subgraph pattern leaves room for later agent, executor, and sleep diagrams without forcing those concerns into the memory session view.</p>
+            </article>
+          </div>
+        </div>
       </section>
 
       <section class="section" id="boundaries">
@@ -172,7 +252,8 @@
           <tr><th>Boundary</th><th>Rule</th><th>Why it matters</th></tr>
           <tr><td><code>melo/</code> to <code>support/</code></td><td><code>melo/</code> must not import infrastructure implementations.</td><td>The runtime stays portable and testable.</td></tr>
           <tr><td>Agent to executor</td><td>Tool calls go through checker and workspace policy.</td><td>Unsafe shell/file operations are rejected before execution.</td></tr>
-          <tr><td>Agent to memory</td><td>Memory write summaries go through checker before long-term persistence.</td><td>Prompt and memory growth stay bounded.</td></tr>
+          <tr><td>Agent to memory</td><td>The agent proposes a remembered candidate; working memory and Hippo receive it in parallel after checker limits apply.</td><td>The agent stays independent of SQLite, vector search, profile tables, tool memory internals, and sleep samples.</td></tr>
+          <tr><td>History to PersonalizedMemory</td><td><code>PersonalizedMemory</code> only receives selected sleep samples; it must not ingest raw history directly.</td><td>Track 4 receives curated training inputs without turning the audit log into online recall or training data by default.</td></tr>
           <tr><td>Backends</td><td>Local backends are connectors only.</td><td>Runtime management belongs outside localmelo core.</td></tr>
         </table>
       </section>
@@ -188,7 +269,7 @@
           <article class="status-card">
             <span class="tag experimental">Active</span>
             <h3>Memory system</h3>
-            <p>SQLite history and long-term storage are async. Retrieval quality, promotion policy, and stress validation remain active work.</p>
+            <p>Track 2 now treats working memory and Hippo as parallel branches. The five-action Hippo controller, metadata-typed profile memory, procedural tool memory, and selected sleep samples are the active design direction.</p>
           </article>
           <article class="status-card">
             <span class="tag planned">Planned</span>
@@ -199,13 +280,6 @@
       </section>
     </article>
 
-    <aside class="toc" aria-label="On this page">
-      <h2>On this page</h2>
-      <a href="#overview">Overview</a>
-      <a href="#diagram">Runtime map</a>
-      <a href="#boundaries">Boundaries</a>
-      <a href="#status">Implementation status</a>
-    </aside>
   </main>
 
   <div class="detail-overlay" id="overlay"></div>
@@ -259,7 +333,7 @@
           <li>Resolve tools from hints and registry search.</li>
           <li>Plan with the chat provider.</li>
           <li>Execute tool calls through executor and checker boundaries.</li>
-          <li>Record task history and memory writeback.</li>
+          <li>Make only a lightweight bool decision that a candidate is worth remembering.</li>
         </ul>
         <h3>Key files</h3><div class="file-list">
           <span class="file-tag">melo/agent/agent.py</span>
@@ -269,18 +343,24 @@
       },
       memory: {
         title: "Memory",
-        role: "Four-layer memory architecture coordinated by Hippo",
+        role: "Track 2 memory session with parallel working and Hippo branches",
         tags: ["store", "model consumer"],
-        body: `<h3>Layers</h3><ul>
-          <li>Working memory - recent session window and latest reflection.</li>
-          <li>History - append-only task and step records.</li>
-          <li>Long-term memory - embedding search with optional SQLite persistence.</li>
-          <li>Tool registry - exact lookup and BM25 search.</li>
+        body: `<h3>Session split</h3><ul>
+          <li><code>working</code> is the agent-facing active cache with two-stage LRU-style refresh: <code>fresh</code> memories are promoted to <code>rehearsed</code> only after reuse.</li>
+          <li>Only <code>rehearsed</code> working memories are eligible for long-term promotion; <code>fresh</code> memories should not persist directly.</li>
+          <li><code>Hippo</code> routes durable and specialized writes to long/profile, tools, and personalized samples.</li>
+          <li><code>history</code> is a raw append-only record/debug layer outside normal recall.</li>
+          <li>Hippo v1 uses <code>NEW</code>, <code>UPDATE</code>, <code>RELATED</code>, <code>CONFLICT</code>, and <code>IGNORE</code> instead of one vector threshold.</li>
         </ul>
         <h3>Key files</h3><div class="file-list">
           <span class="file-tag">melo/memory/coordinator.py</span>
+          <span class="file-tag">melo/memory/hippo/hippo.py</span>
+          <span class="file-tag">melo/memory/hippo/hippo_policy.py</span>
+          <span class="file-tag">melo/memory/short/</span>
           <span class="file-tag">melo/memory/history/sqlite.py</span>
           <span class="file-tag">melo/memory/long/sqlite.py</span>
+          <span class="file-tag">melo/memory/personalized/</span>
+          <span class="file-tag">melo/memory/tools/</span>
         </div>`
       },
       executor: {
@@ -322,7 +402,7 @@
         title: "Sleep",
         role: "Planned offline personalization pipeline",
         tags: ["offline"],
-        body: `<p>Sleep mode is intentionally not the current runtime priority. The modules exist as scaffolding for preprocessing, training, evaluation, and state tracking.</p>
+        body: `<p>Sleep mode remains offline. Track 2 defines the boundary it will consume later: <code>PersonalizedMemory</code> receives filtered samples, not raw history dumps.</p>
         <h3>Key files</h3><div class="file-list">
           <span class="file-tag">melo/sleep/preprocess/</span>
           <span class="file-tag">melo/sleep/training/</span>

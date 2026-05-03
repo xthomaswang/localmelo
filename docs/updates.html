@@ -8,7 +8,7 @@
   <link rel="icon" href="./assets/icon_small.png">
   <link rel="stylesheet" href="./assets/site.css">
 </head>
-<body class="lang-en">
+<body>
   <header class="site-header">
     <div class="topbar">
       <a class="brand" href="./index.html" aria-label="localmelo docs home">
@@ -32,25 +32,56 @@
   <main class="page layout">
     <aside class="sidebar" aria-label="Updates sections">
       <h2>Updates</h2>
-      <a class="active" href="#latest">Latest</a>
+      <a class="active" href="#track-two">Track 2</a>
+      <a href="#latest">Runtime hardening</a>
       <a href="#track-one">Track 1</a>
       <a href="#foundation">Foundation</a>
       <a href="#status">Status</a>
+      <a href="#deliverables">Deliverables</a>
     </aside>
 
     <article class="content">
       <header class="doc-hero">
         <p class="eyebrow">Project updates</p>
-        <h1 data-lang="en">Development changelog and roadmap progress.</h1>
-        <h1 data-lang="zh">开发日志与路线图进度。</h1>
-        <p class="lead" data-lang="en">
+        <h1>Development changelog and roadmap progress.</h1>
+        <p class="lead">
           The changelog focuses on review-relevant changes: runtime behavior,
           public boundaries, verification coverage, and roadmap state.
         </p>
-        <p class="lead" data-lang="zh">
-          这里记录对 review 真正有用的变化：运行时行为、公开边界、验证覆盖与路线图状态。
-        </p>
       </header>
+
+      <section class="section" id="track-two">
+        <article class="update-entry">
+          <div class="update-tags">
+            <span class="tag experimental">track 2</span>
+            <span class="tag stable">memory design</span>
+            <span class="tag planned">sleep-ready</span>
+          </div>
+          <h2>Track 2 memory-system design evolution</h2>
+          <p class="update-date">2026-05-03 - design notes <code>.melo/track2_plan.md</code></p>
+          <p>
+            Track 2 now has a clearer memory-session shape. The online path
+            splits remembered candidates into a fast working-memory branch and
+            a Hippo branch that owns durable or specialized placement.
+          </p>
+          <ul>
+            <li>The agent keeps the v1 write decision lightweight: it only proposes that a candidate is worth remembering.</li>
+            <li><code>working</code> stores short-lived active task/session context with LRU-style refresh; the design direction separates <code>fresh</code> and <code>rehearsed</code> memories.</li>
+            <li>Long-term persistence waits until the related working memory is <code>rehearsed</code> or another strong write signal exists.</li>
+            <li><code>Hippo</code> routes durable writes with five explicit actions: <code>NEW</code>, <code>UPDATE</code>, <code>RELATED</code>, <code>CONFLICT</code>, and <code>IGNORE</code>.</li>
+            <li><code>long</code> and <code>profile</code> share one physical long-term store in v1, distinguished by metadata kinds such as semantic, episodic, profile, and reflection.</li>
+            <li><code>tools</code> remains the authoritative registry and grows procedural skill/template memory without bypassing checker or executor policy.</li>
+            <li><code>PersonalizedMemory</code> is a filtered sleep-sample staging area for Track 4, not a dump of raw history.</li>
+            <li><code>history</code> stays append-only or near-append-only for debugging, replay, auditability, and provenance lookup outside normal recall.</li>
+          </ul>
+          <p>
+            Near-term Track 2 work is to document memory env vars and reset
+            workflow, add multi-session SQLite stress coverage, record real
+            backend long-term retrieval smoke, and freeze the selected-sample
+            schema for <code>PersonalizedMemory</code>.
+          </p>
+        </article>
+      </section>
 
       <section class="section" id="latest">
         <article class="update-entry">
@@ -59,11 +90,10 @@
             <span class="tag stable">memory</span>
             <span class="tag stable">smoke</span>
           </div>
-          <h2 data-lang="en">Runtime storage, reflection bounds, and smoke verification</h2>
-          <h2 data-lang="zh">运行时存储、反思边界与 smoke 验证</h2>
+          <h2>Runtime storage, reflection bounds, and smoke verification</h2>
           <p class="update-date">2026-04-29 - PRs <a href="https://github.com/localmelo/localmelo/pull/8">#8</a> to <a href="https://github.com/localmelo/localmelo/pull/20">#20</a></p>
 
-          <div data-lang="en">
+          <div>
             <p>
               The current runtime baseline moved from "can run" to "can be verified".
               The main changes tightened persistence, bounded reflection context,
@@ -80,21 +110,6 @@
             </ul>
           </div>
 
-          <div data-lang="zh">
-            <p>
-              当前 runtime baseline 已经从「能跑」推进到「能验证」。这轮主要收紧了持久化、
-              reflection prompt、onboarding 校验，并补齐了最小 smoke 路径文档。
-            </p>
-            <ul>
-              <li>SQLite history 和长期记忆改为 async <code>aiosqlite</code> 持久化，支持懒连接和写入串行化。</li>
-              <li>Working memory 只保留最新一条压缩 reflection；超预算时强制 <code>decompose</code>。</li>
-              <li>Onboarding 在保存配置前会 probe chat 和 embedding provider。</li>
-              <li>Executor 边界测试覆盖工作区外绝对路径和 symlink 越界。</li>
-              <li><code>Chat</code> 移入 agent 内部命名空间。</li>
-              <li>Quickstart 补齐 direct CLI、gateway、session 复用、no-embedding 和 backend smoke 命令。</li>
-              <li><code>tests/smoke/</code> 新增可被 pytest 发现的本地 backend smoke。</li>
-            </ul>
-          </div>
         </article>
       </section>
 
@@ -105,11 +120,10 @@
             <span class="tag experimental">agent</span>
             <span class="tag planned">backend</span>
           </div>
-          <h2 data-lang="en">Online core loop foundation</h2>
-          <h2 data-lang="zh">Online core loop 基础完成</h2>
+          <h2>Online core loop foundation</h2>
           <p class="update-date">2026-03-29 - issue <a href="https://github.com/localmelo/localmelo/issues/3">#3</a></p>
 
-          <div data-lang="en">
+          <div>
             <p>
               Track 1 established the first usable online agent loop: retrieval,
               tool resolution, planning, execution, memory writeback, and response
@@ -124,19 +138,6 @@
             </ul>
           </div>
 
-          <div data-lang="zh">
-            <p>
-              Track 1 建立了第一条可用 online agent loop：检索、工具解析、规划、执行、
-              记忆写回，以及 direct CLI / gateway 两个入口的响应路径。
-            </p>
-            <ul>
-              <li>后端注册表支持 Ollama、MLC、vLLM、SGLang 本地适配器，以及 OpenAI、Anthropic、Gemini、NVIDIA 云端适配器。</li>
-              <li><code>chat_backend</code> 与 <code>embedding_backend</code> 分离配置。</li>
-              <li>Attempt-based agent loop，包含结构化 reflection 与 utility gate。</li>
-              <li>Ollama native chat provider，支持 thinking/answer 拆分。</li>
-              <li>数据驱动 smoke benchmark，用于 backend 对比。</li>
-            </ul>
-          </div>
         </article>
       </section>
 
@@ -146,11 +147,10 @@
             <span class="tag planned">foundation</span>
             <span class="tag experimental">architecture</span>
           </div>
-          <h2 data-lang="en">Initial architecture split</h2>
-          <h2 data-lang="zh">初始架构拆分</h2>
+          <h2>Initial architecture split</h2>
           <p class="update-date">2026-03-25</p>
 
-          <div data-lang="en">
+          <div>
             <ul>
               <li>Split the runtime into <code>melo/</code> and infrastructure into <code>support/</code>.</li>
               <li>Introduced provider contracts to reduce coupling between core runtime and backend implementations.</li>
@@ -159,38 +159,33 @@
             </ul>
           </div>
 
-          <div data-lang="zh">
-            <ul>
-              <li>运行时拆分到 <code>melo/</code>，基础设施拆分到 <code>support/</code>。</li>
-              <li>引入 provider contracts，降低 core runtime 与 backend implementation 的耦合。</li>
-              <li>建立 memory 和 sleep 包边界，为后续个性化工作留出位置。</li>
-              <li>围绕初始架构扩展早期回归测试。</li>
-            </ul>
-          </div>
         </article>
       </section>
 
       <section class="section" id="status">
-        <h2 data-lang="en">Current roadmap posture</h2>
-        <h2 data-lang="zh">当前路线图状态</h2>
+        <h2>Current roadmap posture</h2>
         <table>
           <tr><th>Area</th><th>Status</th><th>Next useful work</th></tr>
           <tr><td>Online core loop</td><td><span class="tag stable">verified baseline</span></td><td>Record real backend smoke results and continue gateway lifecycle coverage.</td></tr>
-          <tr><td>Memory system</td><td><span class="tag experimental">active</span></td><td>Validate persistent retrieval with real data and stress multi-session memory access.</td></tr>
+          <tr><td>Memory system</td><td><span class="tag experimental">active design</span></td><td>Implement Hippo's five-action controller, document memory operations, and stress persistent multi-session access.</td></tr>
           <tr><td>Deployment shell</td><td><span class="tag planned">planned</span></td><td>Define product shell responsibilities outside the core runtime.</td></tr>
           <tr><td>Sleep pipeline</td><td><span class="tag planned">planned</span></td><td>Write the design issue before implementing training/evaluation.</td></tr>
           <tr><td>Quality / release</td><td><span class="tag experimental">ongoing</span></td><td>Keep docs, tests, smoke, and issue hygiene aligned with each track.</td></tr>
         </table>
       </section>
+
+      <section class="section" id="deliverables">
+        <h2>Track 2 deliverables</h2>
+        <table>
+          <tr><th>Deliverable</th><th>Status</th></tr>
+          <tr><td>Document memory env vars, file layout, retention semantics, and reset workflow.</td><td><span class="tag planned">planned</span></td></tr>
+          <tr><td>Add multi-session SQLite stress coverage.</td><td><span class="tag planned">planned</span></td></tr>
+          <tr><td>Run and record real-backend long-term retrieval smoke for local and online embedding backends.</td><td><span class="tag planned">planned</span></td></tr>
+          <tr><td>Freeze and document the <code>PersonalizedMemory</code> selected-sample schema for v1.</td><td><span class="tag planned">planned</span></td></tr>
+        </table>
+      </section>
     </article>
 
-    <aside class="toc" aria-label="On this page">
-      <h2>On this page</h2>
-      <a href="#latest">Latest</a>
-      <a href="#track-one">Track 1</a>
-      <a href="#foundation">Foundation</a>
-      <a href="#status">Roadmap posture</a>
-    </aside>
   </main>
 
   <footer class="site-footer">

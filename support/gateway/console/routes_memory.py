@@ -19,7 +19,10 @@ whether the offer is still open (it is when the record could not be written).
 ``[memory] across_chats`` and ``POST /api/memory/reindex`` rebuilds the index
 from the chats. In developer mode (``[ui] mode = "developer"``; anywhere else
 404), ``POST /api/memory/sleep`` runs one sleep (:mod:`localmelo.support.memory.sleep`)
-and answers its report, and ``DELETE /api/memory/sleep/{run_id}`` undoes that run.
+and answers its report, and ``DELETE /api/memory/sleep/{run_id}`` undoes that run. ``POST /api/memory/adapter``
+(developer mode too) builds the personal query adapter from the notes and chats from
+scratch and answers its report (409 with memory off; searches use the adapter only
+with ``[memory] adapter`` on).
 """
 
 from __future__ import annotations
@@ -326,6 +329,15 @@ def add_routes(app: FastAPI, console: Console) -> None:
             raise ApiError(404, "not_found", t("errors.sleepGone"))
         await _identity_changed(console, pinned)
         return undone
+
+    @app.post("/api/memory/adapter")
+    async def memory_adapter() -> dict[str, Any]:
+        _developer(console)
+        if not console.memory.enabled:
+            raise ApiError(409, "memory_off", t("errors.adapterMemoryOff"))
+        chats = console.store if console.store_state() == "ok" else None
+        report = await console.memory.rebuild_adapter(chats)
+        return report.to_json()
 
 
 __all__: list[str] = []

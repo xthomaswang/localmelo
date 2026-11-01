@@ -6,7 +6,8 @@ much is kept; ``reindex`` rebuilds the chat index and gives every note a vector 
 the embedding model now set; ``import`` offers the notes other assistants keep
 (``--undo BATCH`` takes a batch back). The files are shared with the web console and the app.
 ``sleep [VARIANT]`` (developer mode only) tidies the notes by the ``[memory] sleep``
-variant and prints what it changed.
+variant and prints what it changed; ``adapter rebuild`` (developer mode only) builds the
+personal query adapter from the notes and chats and says what it made.
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ import argparse
 import asyncio
 import os
 import sys
+import time
 from collections.abc import Sequence
+from typing import Any
 
 from localmelo.melo.memory.long import StoredEntry
 from localmelo.support import command_words, config, onboard
@@ -28,7 +31,7 @@ from localmelo.support.sessions.store import (
     default_path,
 )
 
-VERBS = ("list", "forget", "status", "reindex", "import", "sleep")
+VERBS = ("list", "forget", "status", "reindex", "import", "sleep", "adapter")
 
 
 def note_origin(entry: StoredEntry) -> str:
@@ -111,6 +114,17 @@ def _forget(note_id: int | None, yes: bool) -> int:
     return 0
 
 
+def _adapter_line(adapter: dict[str, Any]) -> str:
+    """The status row of the query adapter: the setting and what is built."""
+    if not adapter["pairs"]:
+        return "on, none built" if adapter["on"] else "off, none built"
+    built = time.strftime("%Y-%m-%d %H:%M", time.localtime(adapter["built_at"]))
+    use = "on" if adapter["on"] else "off"
+    if adapter["on"] and not adapter["active"]:
+        use = "on, but built for another embedding model"
+    return f"{use}, {adapter['pairs']} pairs, built {built}"
+
+
 async def _status() -> int:
     memory = ChatMemory(config.load)
     try:
@@ -128,6 +142,8 @@ async def _status() -> int:
         ),
         ("folder", onboard._home_path(memory.directory)),
     ]
+    if status["adapter"]:
+        rows.append(("adapter", _adapter_line(status["adapter"])))
     if status["last_error"]:
         rows.append(("last error", status["last_error"]))
     for name, value in rows:
@@ -203,6 +219,38 @@ async def _sleep(variant: str | None) -> int:
         await memory.aclose()
 
 
+async def _adapter() -> int:
+    memory = ChatMemory(config.load)
+    chats = await _open_chats()
+    try:
+        if isinstance(chats, int):
+            return chats
+        report = await memory.rebuild_adapter(chats)
+    finally:
+        if isinstance(chats, SessionStore):
+            await chats.aclose()
+        await memory.aclose()
+    counts = ", ".join(f"{n} {name}" for name, n in report.by_source.items())
+    if report.state == "built":
+        print(
+            f"Adapter built from {report.pairs} pairs ({counts}) in "
+            f"{report.seconds:.1f} s: held-out loss {report.baseline_loss:.3f} -> "
+            f"{report.held_out_loss:.3f}, held-out rank {report.baseline_mrr:.2f} -> "
+            f"{report.held_out_mrr:.2f} after {report.steps} steps"
+            + (
+                ""
+                if memory.adapter_on()
+                else " (the setting is off: searches ignore it)"
+            )
+        )
+        return 0
+    verb = {"removed": "removed", "unchanged": "unchanged"}.get(
+        report.state, "not built"
+    )
+    print(f"Adapter {verb}: {report.reason}" + (f" ({counts})" if counts else ""))
+    return 0 if report.state != "skipped" else 1
+
+
 def main(argv: Sequence[str], prog: str = "melo memory") -> int:
     rest = list(argv)
     if rest and not rest[0].startswith("-") and rest[0] not in VERBS:
@@ -234,8 +282,15 @@ def main(argv: Sequence[str], prog: str = "melo memory") -> int:
     if developer:
         tidy = verbs.add_parser("sleep", help="tidy the notes (developer mode)")
         tidy.add_argument("variant", nargs="?", choices=config.MEMORY_SLEEP)
-    elif rest[:1] == ["sleep"]:
-        print('melo: "memory sleep" needs [ui] mode = "developer"', file=sys.stderr)
+        personal = verbs.add_parser(
+            "adapter", help="the personal query adapter (developer mode)"
+        )
+        steps = personal.add_subparsers(dest="step", required=True, metavar="STEP")
+        steps.add_parser("rebuild", help="build it from the notes and chats now")
+    elif rest[:1] in (["sleep"], ["adapter"]):
+        print(
+            f'melo: "memory {rest[0]}" needs [ui] mode = "developer"', file=sys.stderr
+        )
         return 2
     args = parser.parse_args(rest)
     if args.verb == "list":
@@ -246,6 +301,8 @@ def main(argv: Sequence[str], prog: str = "melo memory") -> int:
         return asyncio.run(_status())
     if args.verb == "sleep":
         return asyncio.run(_sleep(args.variant))
+    if args.verb == "adapter":
+        return asyncio.run(_adapter())
     if args.verb == "import":
         from localmelo.support.cli import memory_import
 

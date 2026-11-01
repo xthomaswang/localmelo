@@ -131,6 +131,8 @@ EXPERIMENTAL_KEYS: dict[str, str] = {
     "memory.keep_statements": "#299",
     "memory.sleep": "#363",
     "memory.sleep_lock": "#363",
+    "memory.adapter": "#373",
+    "memory.adapter_penalty": "#373",
 }
 
 # Long option name -> tier, for every option the parser has.

@@ -17,7 +17,10 @@ noted something and no note was kept, :meth:`ChatMemory.keep_claims` keeps what
 the reply named, by the same checks, or flags the turn ``unsaved_claim``.
 With the developer setting ``[memory] sleep`` (:mod:`.sleep`),
 :meth:`ChatMemory.sleep` tidies the notes while melo is idle;
-:meth:`ChatMemory.undo_sleep` puts a run back.
+:meth:`ChatMemory.undo_sleep` puts a run back. With the developer setting
+``[memory] adapter`` (:mod:`.adapter`), a question's embedding passes through a
+small personal map before search (:meth:`ChatMemory.rebuild_adapter` trains it;
+a forget, an edit or an undo deletes it at once and a new one is built).
 A query embedding that takes over :data:`EMBED_TIMEOUT_S` or fails falls back
 to BM25 for that turn. ``[memory] retriever`` picks how notes are found:
 ``auto`` (words, and meaning too with an embedding model), ``bm25``,
@@ -32,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import contextvars
+import functools
 import logging
 import os
 import time
@@ -50,6 +54,7 @@ from localmelo.melo.memory.long.sqlite import SqliteLongTerm
 from localmelo.melo.memory.retrieval import Doc, LLMRetriever, send_from_provider
 from localmelo.melo.memory.retrieval.base import elapsed_ms
 from localmelo.melo.schema import EMPTY_REPLY_NUDGE, Message, ToolDef, split_thinking
+from localmelo.support.memory import adapter as adapting
 from localmelo.support.memory import records
 from localmelo.support.memory import sleep as sleeping
 from localmelo.support.memory.importer import (
@@ -268,6 +273,11 @@ def _same_folder(a: object, b: object) -> bool:
     return _real_folder(a) == _real_folder(b)
 
 
+def _instructed(model: str, text: str) -> str:
+    """*text* as a question for *model*: the Qwen3 models want an instruction first."""
+    return _QWEN3_QUERY + text if "qwen3-embedding" in model.lower() else text
+
+
 def _record_item(entry: StoredEntry) -> Item:
     provenance = entry.provenance
     return Item(
@@ -421,6 +431,16 @@ class ChatMemory:
         self._plans: dict[str, ImportPlan] = {}
         self.last_error = ""
         self._warned = False
+        # The query adapter: the saved file as last read (keyed by its stat),
+        # a count of drops so a build that began before one is not saved, the
+        # background build, and the chats a build reads (the last ones seen).
+        self._adapter: tuple[tuple[int, int, int], adapting.Adapter | None] | None = (
+            None
+        )
+        self._dropped = 0
+        self._building: asyncio.Task[None] | None = None
+        self._rebuild_again = False
+        self._chats: SessionStore | None = None
 
     # ── Settings and stores ──
 
@@ -498,12 +518,20 @@ class ChatMemory:
         return self._llm
 
     async def _embed(
-        self, texts: Sequence[str], timeout: float, *, query: bool
+        self,
+        texts: Sequence[str],
+        timeout: float,
+        *,
+        query: bool,
+        adapt: bool = True,
     ) -> Embedded:
         """Vectors of *texts*, or none: no model, a failure, or a retriever without vectors.
 
         With *query*, the first text is a question and gets the query
-        instruction the Qwen3 embedding models expect.
+        instruction the Qwen3 embedding models expect, and, with the developer
+        setting ``[memory] adapter`` on and an adapter built for this model, its
+        vector passes through the adapter (unless *adapt* is false). The other
+        texts are documents: their vectors are never touched.
         """
         if self.retriever() in ("bm25", "llm"):
             return Embedded(None, "")  # these two make no embedding calls
@@ -513,14 +541,16 @@ class ChatMemory:
         if not texts:
             return Embedded(None, model)
         batch = list(texts)
-        if query and "qwen3-embedding" in model.lower():
-            batch[0] = _QWEN3_QUERY + batch[0]
+        if query:
+            batch[0] = _instructed(model, batch[0])
         try:
             async with asyncio.timeout(timeout):
                 vectors = await provider.embed(batch)
             if len(vectors) != len(batch):
                 raise ValueError(f"{len(vectors)} vectors for {len(batch)} texts")
             self.last_error = ""
+            if query and adapt:
+                vectors = self._adapted(vectors, model)
             return Embedded(vectors, model)
         except Exception as exc:
             reason = (
@@ -761,6 +791,7 @@ class ChatMemory:
         each time the model keeps one.
         """
         CHAT_TURN.set(None)
+        self._chats = store
         if is_owner_question(info):
             typed = ""  # a turn the person did not begin holds no words of theirs
         keep_from: int | None = None
@@ -1093,13 +1124,16 @@ class ChatMemory:
 
     async def forget_session(self, session_id: str, turn: int | None = None) -> int:
         """Delete indexed chat text and its inactive sleep negatives; keep active notes."""
+        self._drop_adapter()
         await self.drain()
         async with self._lock:
             store, index = self.stores()
             for note in await store.session_entries(session_id, undone_only=True):
                 if turn is None or note.provenance.get("turn") == turn:
                     await store.delete_entry(note.id, versions=False)
-            return await index.delete(session_id, turn)
+            gone = await index.delete(session_id, turn)
+        self._schedule_adapter()
+        return gone
 
     async def forget_all(self) -> tuple[int, int]:
         """Forget every note and empty the chat index; the counts of each.
@@ -1107,6 +1141,7 @@ class ChatMemory:
         Chats are not touched, and the turns that ended before now are not
         indexed again by a reindex.
         """
+        self._drop_adapter()
         await self.drain()
         async with self._lock:
             records_store, index = self.stores()
@@ -1114,15 +1149,18 @@ class ChatMemory:
             await records_store.forget_all()
             turns = await index.forget_all()
             self._corpus = Corpus()
+        self._schedule_adapter()
         return notes, turns
 
     async def forget_chat_notes(self, session_id: str) -> int:
         """Delete a chat's note history; return how many active notes it held."""
+        self._drop_adapter()
         async with self._lock:
             store = self.stores()[0]
             mine = await store.session_entries(session_id)
             for note in mine:
                 await store.delete_entry(note.id, versions=note.status == "active")
+        self._schedule_adapter()
         return sum(note.status == "active" for note in mine)
 
     async def reindex(self, chats: SessionStore | None) -> tuple[int, int]:
@@ -1335,8 +1373,11 @@ class ChatMemory:
             return list(reversed(await self.stores()[0].active_entries()))
 
     async def delete_record(self, record_id: int, *, undo: bool = False) -> bool:
+        self._drop_adapter()
         async with self._lock:
-            return await self.stores()[0].delete_entry(record_id, restore=undo)
+            done = await self.stores()[0].delete_entry(record_id, restore=undo)
+        self._schedule_adapter()
+        return done
 
     async def edit_record(self, record_id: int, text: str) -> StoredEntry | None:
         """Reword a note; ``None`` when it is gone. Raises ``ValueError`` (a plain
@@ -1352,6 +1393,7 @@ class ChatMemory:
             raise ValueError(
                 "That looks like a password or key, so melo does not keep it."
             )
+        self._drop_adapter()
         vectors, model, _ = await self._embed(
             [text], INDEX_EMBED_TIMEOUT_S, query=False
         )
@@ -1368,9 +1410,11 @@ class ChatMemory:
             self._corpus.remove(
                 f"r:{record_id}"
             )  # the next search reads the new wording
-            return next(
+            edited = next(
                 (e for e in await store.active_entries() if e.id == record_id), None
             )
+        self._schedule_adapter()
+        return edited
 
     async def sleep(
         self,
@@ -1412,21 +1456,12 @@ class ChatMemory:
             else []
         )
 
-        async def active() -> bool:
-            if not self.enabled:
-                return True
-            if chats is not None:
-                for session in await chats.list_sessions(
-                    limit=100_000, kinds=("chat", "front")
-                ):
-                    if session.updated_at > began and any(
-                        t.started_at > began for t in await chats.list_turns(session.id)
-                    ):
-                        return True
-            return False
+        active = functools.partial(self._active, chats, began)
 
         async def notes_for(typed: str) -> list[int]:
-            embedded = await self._embed([typed], EMBED_TIMEOUT_S, query=True)
+            embedded = await self._embed(
+                [typed], EMBED_TIMEOUT_S, query=True, adapt=False
+            )
             vector = unit(embedded.vectors[0]) if embedded.vectors else None
             found = ranked(
                 await self._sync(),
@@ -1458,12 +1493,172 @@ class ChatMemory:
                 embed_note=embed_note if self.embedding()[0] is not None else None,
             )
         logger.info("memory.sleep %s", report.to_json())
+        self._schedule_adapter()
         return report
+
+    async def _active(self, chats: SessionStore | None, began: float) -> bool:
+        """Whether a chat turn began after *began* (or memory was switched off)."""
+        if not self.enabled:
+            return True
+        if chats is not None:
+            for session in await chats.list_sessions(
+                limit=100_000, kinds=("chat", "front")
+            ):
+                if session.updated_at > began and any(
+                    t.started_at > began for t in await chats.list_turns(session.id)
+                ):
+                    return True
+        return False
 
     async def undo_sleep(self, run_id: str) -> dict[str, Any] | None:
         """Put the sleep run *run_id* back (:func:`sleeping.undo`); ``None`` when unknown."""
+        self._drop_adapter()
         async with self._lock:
-            return await sleeping.undo(*self.stores(), run_id)
+            undone = await sleeping.undo(*self.stores(), run_id)
+        self._schedule_adapter()
+        return undone
+
+    # ── The personal query adapter ──
+
+    def adapter_on(self) -> bool:
+        """``[memory] adapter`` now: a developer setting, off by default."""
+        cfg = self._settings()
+        return cfg is not None and cfg.memory.adapter == "on"
+
+    def _saved(self) -> adapting.Adapter | None:
+        """The adapter file as it is now (read again only when the file changed)."""
+        try:
+            info = os.stat(adapting.path_of(self.directory))
+        except OSError:
+            self._adapter = None
+            return None
+        key = (info.st_mtime_ns, info.st_size, info.st_ino)
+        if self._adapter is None or self._adapter[0] != key:
+            self._adapter = (key, adapting.load(adapting.path_of(self.directory)))
+        return self._adapter[1]
+
+    def _adapted(self, vectors: list[list[float]], model: str) -> list[list[float]]:
+        """*vectors* with the first, a question's, mapped by the adapter when it
+        applies: the setting is on and it was built for this model and size."""
+        if not self.adapter_on() or not vectors:
+            return vectors
+        try:
+            saved = self._saved()
+            mapped = (
+                saved.apply(vectors[0])
+                if saved is not None and saved.matches(model, len(vectors[0]))
+                else None
+            )
+        except Exception:
+            logger.warning(
+                "The query adapter failed; searching without it", exc_info=True
+            )
+            return vectors
+        return vectors if mapped is None else [mapped, *vectors[1:]]
+
+    def adapter_status(self) -> dict[str, Any] | None:
+        """What the adapter is now; ``None`` when the setting is off and none is built."""
+        saved, on = self._saved(), self.adapter_on()
+        if saved is None:
+            return (
+                {"on": True, "pairs": 0, "built_at": None, "held_out_loss": None}
+                if on
+                else None
+            )
+        return {
+            "on": on,
+            "pairs": saved.pairs,
+            "built_at": saved.built_at,
+            "held_out_loss": saved.held_out_loss,
+            "active": on and saved.matches(self.embedding()[1], saved.dim),
+            "train_hash": saved.train_hash,
+        }
+
+    def _drop_adapter(self) -> None:
+        """Delete the adapter file now, before the change that calls this: a forget,
+        an edit or an undo may touch a note it was trained on, and a build that
+        began earlier is not saved."""
+        self._dropped += 1
+        if adapting.remove(adapting.path_of(self.directory)):
+            self._adapter = None
+            logger.info("memory.adapter %s", {"state": "removed", "pairs": 0})
+
+    def _schedule_adapter(self) -> None:
+        """Build the adapter in the background when the setting is on (one at a
+        time; a request that comes while one runs makes it run once more)."""
+        if not (self.adapter_on() and self.enabled):
+            return
+        if self._building is not None and not self._building.done():
+            self._rebuild_again = True
+            return
+        self._building = asyncio.ensure_future(self._build_adapter())
+
+    async def _build_adapter(self) -> None:
+        while True:
+            self._rebuild_again = False
+            try:
+                await self.rebuild_adapter()
+            except Exception:
+                logger.warning("Could not build the query adapter", exc_info=True)
+            if not self._rebuild_again:
+                return
+
+    async def drain_adapter(self) -> None:
+        """Wait for the background build, when one is under way."""
+        if self._building is not None:
+            await asyncio.gather(self._building, return_exceptions=True)
+
+    async def rebuild_adapter(
+        self, chats: SessionStore | None = None
+    ) -> adapting.AdapterReport:
+        """Build the adapter from the notes and *chats* (the last chats seen when
+        ``None``) from scratch, and say what happened. Nothing is built with
+        memory off, no embedding model, the ``sleep_lock`` file present or a chat
+        turn begun meanwhile. Searches use it only with ``[memory] adapter`` on.
+        """
+        if not self.enabled:
+            return adapting.AdapterReport("skipped", "memory across chats is off")
+        provider, model = self.embedding()
+        if provider is None:
+            return adapting.AdapterReport("skipped", "no embedding model is set up")
+        cfg = self._settings()
+        lock = cfg.memory.sleep_lock if cfg is not None else ""
+        chats = chats if chats is not None else self._chats
+        idle = functools.partial(
+            sleeping.check_idle,
+            lock,
+            functools.partial(self._active, chats, time.time()),
+        )
+        dropped = self._dropped
+        report = await adapting.rebuild(
+            self.stores()[0],
+            self.directory,
+            chats,
+            model=model,
+            embed=self._embed_questions,
+            idle=idle,
+            lock=self._lock,
+            fresh=lambda: dropped == self._dropped,
+            penalty=float(cfg.memory.adapter_penalty) if cfg is not None else 1.0,
+        )
+        self._adapter = None
+        logger.info("memory.adapter %s", report.to_json())
+        return report
+
+    async def _embed_questions(self, texts: Sequence[str]) -> list[list[float]] | None:
+        """Vectors of *texts* as questions, as the embedding model reads them and
+        without the adapter; ``None`` when it fails."""
+        provider, model = self.embedding()
+        if provider is None:
+            return None
+        batch = [_instructed(model, text) for text in texts]
+        try:
+            async with asyncio.timeout(INDEX_EMBED_TIMEOUT_S):
+                vectors = await provider.embed(batch)
+        except Exception as exc:
+            self._failed(f"{model}: {exc or type(exc).__name__}", "embedding")
+            return None
+        return vectors if len(vectors) == len(batch) else None
 
     # ── Notes brought in from other assistants' files ──
 
@@ -1557,6 +1752,7 @@ class ChatMemory:
 
         A note the person reworded since is theirs now: it stays (see :meth:`import_kept`).
         """
+        self._drop_adapter()
         async with self._lock:
             store = self.stores()[0]
             mine = [
@@ -1566,6 +1762,7 @@ class ChatMemory:
             ]
             for entry_id in mine:
                 await store.delete_entry(entry_id, restore=True)
+        self._schedule_adapter()
         if plan := self._plans.get(batch_id):
             plan.applied.clear()
         return len(mine)
@@ -1613,6 +1810,7 @@ class ChatMemory:
             "embedding_model": model,
             "retriever": mode,
             "last_error": self.last_error,
+            "adapter": self.adapter_status(),
         }
 
     # ── Lifecycle ──
@@ -1649,6 +1847,9 @@ class ChatMemory:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
 
     async def aclose(self) -> None:
+        if self._building is not None and not self._building.done():
+            self._building.cancel()
+            await asyncio.gather(self._building, return_exceptions=True)
         await self.drain()
         if self._embedder is not None:
             with contextlib.suppress(Exception):

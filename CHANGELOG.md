@@ -9,6 +9,16 @@ localmelo has no release yet. The v0.1.0 milestone is due 2026-12-20.
 
 ### Added
 
+- Developer setting `[memory] adapter` (`off` by default; `on`; `-X memory.adapter=on`, with
+  `adapter_penalty`, both listed by `melo -h all`) adjusts a question's embedding with a small
+  linear map trained on the computer from the notes' quotes, the notes a chat turn recalled and
+  sleep merges, before the notes are searched. It never trains on People or Decisions notes,
+  imports or secrets, needs at least 30 pairs, keeps the step that ranks held-out notes best,
+  and is removed at once by a forget, edit, delete or undo (rebuilt in the background when on).
+  With the setting off, searches are unchanged. `melo memory adapter rebuild` (developer mode)
+  and `POST /api/memory/adapter` rebuild it and report; `melo memory status` shows it.
+  Part of #373. [#NN]
+
 - Note tidying skips facts whose values an active note already holds, using
   bounded embedding similarity or a word-only fallback without merging different
   known subjects. Reports list selected turns and each model operation's bounded,

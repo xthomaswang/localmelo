@@ -176,6 +176,15 @@ The report includes `model_calls`, `refused`, elapsed `ms`, changes and any abor
 
 The report lists `selected` turns in request order and each model operation in `proposals`: its source, operation, target, text and quote (each at most 200 characters, secrets redacted), and `applied`, `noop` or the specific refused check. Applied changes carry that same label. Parse failures are visible even on the first attempt; operations skipped after the change cap are `noop` with `capped=true`. These are diagnostics, not an export or training pipeline.
 
+### Adjusting questions to you (developer setting)
+
+`[memory] adapter` is off by default; `-X memory.adapter=on` turns it on for one run, and `melo -h all` lists it. When on, a small linear map, trained on this computer, adjusts the embedding of a question before the notes are searched. Notes and chat turns keep their vectors, and with the setting off searches are exactly as without it.
+
+- It learns from three kinds of pairs: a note's quote and the note, the words you typed in a chat turn and the notes that turn recalled, and the older wording of two notes a tidy-up merged and the note it kept. Notes of People and Decisions, imported notes, secrets and notes you reworded after the quote or the recall are never used. With fewer than 30 pairs, or fewer than 10 notes, there is no map.
+- Training holds back a tenth of the notes and keeps the map only when it finds those notes better than no change does. `adapter_penalty` (default 1.0) holds the map closer to no change.
+- The map is a file in the memory folder (`adapter.npz`, readable only by you). A forget, an edit, a delete or an undo removes it at once; with the setting on, melo builds it again in the background. It is also built again after a tidy-up. A map built for another embedding model is ignored.
+- `melo memory adapter rebuild` (developer mode) or `POST /api/memory/adapter` builds it again now and reports the pairs, the held-out loss and rank before and after, or why nothing was built. `melo memory status` shows whether one exists.
+
 ### What a task starts with
 
 A task's worker has no long-term memory of its own: it neither recalls nor keeps notes. What it knows about you comes in one short **context pack** that the chat that started it builds once, when the task is created. Workers do not use it yet; the pack is ready for the chat to call.

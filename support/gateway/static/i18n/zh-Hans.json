@@ -450,6 +450,7 @@
   "drawer.tools.revoke": "撤回",
   "drawer.tools.revokeAll": "撤回全部授权",
   "drawer.tools.revokeOne": "撤回 {tool}",
+  "errors.adapterMemoryOff": "跨对话记忆已关闭，没有可用来构建适配器的笔记。",
   "errors.approvalAnswered": "这个审批已经回答过了。",
   "errors.approvalNotFound": "找不到这个审批。",
   "errors.blankMessage": "text：消息不能为空",

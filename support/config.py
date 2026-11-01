@@ -69,6 +69,8 @@ RETRIEVAL_MODES = ("auto", "off", "bm25", "llm", "embedding")
 MEMORY_RETRIEVERS = ("auto", "bm25", "embedding", "llm")
 # How notes are tidied while melo is idle: see MemoryConfig.sleep.
 MEMORY_SLEEP = ("off", "rules", "model", "model+tags")
+# Whether a question's embedding passes through a personal map: see MemoryConfig.adapter.
+MEMORY_ADAPTER = ("off", "on")
 RECALL_TRIGGERS = ("start", "attempt", "step", "tool")
 RECALL_KINDS = ("note", "draft", "thought", "digest", "reflection", "long")
 RECALL_PLACEMENTS = ("tool", "message")
@@ -315,7 +317,11 @@ class MemoryConfig:
     setting, tidies the notes while melo is idle: ``off`` (the default) or
     ``rules`` (no model call), ``model`` (rules then a bounded model pass), or
     ``model+tags`` (the same call limit, tagged turns first). ``sleep_lock`` is
-    an optional path whose presence prevents model requests.
+    an optional path whose presence prevents model requests. ``adapter``, a
+    developer setting too, is ``off`` (the default) or ``on``: a small linear
+    map, trained on this computer from the notes and chats, adjusts a
+    question's embedding before notes are searched; ``adapter_penalty`` is how
+    strongly training is held to the identity map (1.0).
     """
 
     admit_on_outcome: bool = False
@@ -324,6 +330,8 @@ class MemoryConfig:
     keep_statements: bool = False
     sleep: str = "off"  # off | rules | model | model+tags
     sleep_lock: str = ""  # Optional lock path: no model calls while it exists.
+    adapter: str = "off"  # off | on
+    adapter_penalty: float = 1.0  # L2 penalty of the map's distance from identity
 
 
 @dataclass
@@ -539,6 +547,21 @@ class Config:
             or "\x00" in self.memory.sleep_lock
         ):
             errors.append("[memory] sleep_lock must be a path string without NUL")
+        if self.memory.adapter not in MEMORY_ADAPTER:
+            errors.append(
+                f"[memory] adapter {self.memory.adapter!r} is not recognised. "
+                f"Must be one of {MEMORY_ADAPTER}."
+            )
+        penalty = self.memory.adapter_penalty
+        if (
+            isinstance(penalty, bool)
+            or not isinstance(penalty, int | float)
+            or not math.isfinite(penalty)
+            or penalty < 0
+        ):
+            errors.append(
+                f"[memory] adapter_penalty must be a number of at least 0, got {penalty!r}"
+            )
         return errors
 
     def _validate_browser(self) -> list[str]:
@@ -1506,6 +1529,10 @@ def save(cfg: Config) -> None:
             lines.append(f"sleep = {_toml_string(cfg.memory.sleep)}")
         if cfg.memory.sleep_lock:
             lines.append(f"sleep_lock = {_toml_string(cfg.memory.sleep_lock)}")
+        if cfg.memory.adapter != "off":
+            lines.append(f"adapter = {_toml_string(cfg.memory.adapter)}")
+        if cfg.memory.adapter_penalty != 1.0:
+            lines.append(f"adapter_penalty = {_toml_value(cfg.memory.adapter_penalty)}")
         lines.append("")
 
     if cfg.browser != BrowserConfig():

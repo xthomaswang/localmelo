@@ -38,7 +38,7 @@ melo -h all                                  # every option, command and setting
 |---|---|---|
 | `melo setup` | 重新选择模型服务器，然后打开对话。 | |
 | `melo config` | 显示配置文件的位置，以及哪些设置与默认值不同。 | |
-| `melo memory VERB` | 查看和修改 melo 保存的笔记：`list`、`forget`、`status`、`reindex`、`import`（开发者模式下还有 `sleep`）。 | `list -n N`、`forget ID`、`forget -y`、`import --undo BATCH` |
+| `melo memory VERB` | 查看和修改 melo 保存的笔记：`list`、`forget`、`status`、`reindex`、`import`（开发者模式下还有 `sleep` 和 `adapter rebuild`）。 | `list -n N`、`forget ID`、`forget -y`、`import --undo BATCH` |
 | `melo serve [install\|uninstall\|status\|stop]` | 运行网关，把它作为登录服务管理（macOS），或停止正在运行的网关。 | `--host H`, `-p`/`--port N`, `--playground`, `--force` |
 | `melo console [--reset]` | 在浏览器中打开已登录的网页控制台；通过 SSH 或没有浏览器能启动时，改为输出一次性链接。`--reset` 轮换访问令牌。 | `--host H`, `-p`/`--port N` |
 | `melo task VERB` | `melo-task` 客户端。 | 同 `melo-task` |
@@ -123,7 +123,7 @@ melo -h all                                  # every option, command and setting
 
 ### 记忆
 
-`melo memory VERB` 查看和修改 melo 保存的关于你的笔记，也就是控制台 Memory 标签页列出的那些（见[跨对话记忆](../concepts/memory.md#memory-across-chats)）。它读写 `~/.cache/localmelo/memory/`。查看和忘记笔记不调用模型；`reindex` 可为笔记和轮次生成嵌入，开发者模式的 `sleep` 按所选方式使用配置的嵌入模型和聊天模型。
+`melo memory VERB` 查看和修改 melo 保存的关于你的笔记，也就是控制台 Memory 标签页列出的那些（见[跨对话记忆](../concepts/memory.md#memory-across-chats)）。它读写 `~/.cache/localmelo/memory/`。查看和忘记笔记不调用模型；`reindex` 可为笔记和轮次生成嵌入，开发者模式的 `sleep` 按所选方式使用配置的嵌入模型和聊天模型，`adapter rebuild` 使用嵌入模型。
 
 | 动词 | 作用 |
 |---|---|
@@ -133,6 +133,7 @@ melo -h all                                  # every option, command and setting
 | `melo memory import [-u BATCH]` | 提议导入这台电脑上其他助手保存的关于你的笔记：一个列表，选项是 `Bring in N notes from M files`、`Show what they say` 和 `Not now`（管道输入时是编号问题）。列表默认停在 `Show what they say`。选第一行之前不写入任何内容，选了之后打印批次；Esc、ctrl+c 和输入结束不导入任何内容，也不记录回答（`Nothing brought in.`，Esc 和 ctrl+c 退出码为 130，其他为 0）。`-u BATCH`（`--undo`）收回该批次，并保留你之后编辑过的笔记（`Kept N notes you edited.`）。`--undo` 找不到笔记时退出码为 1。 |
 | `melo memory reindex` | 从对话重建对话索引，并给每条笔记补上当前嵌入模型的向量。上次“忘记全部”之前结束的轮次不会进入。`melo serve` 或应用运行时退出码为 1，因为对话由它们持有。 |
 | `melo memory sleep [VARIANT]` | 仅开发者模式（`[ui] mode = "developer"`，否则退出码 2）。用 `off`、`rules`、`model` 或 `model+tags` 整理笔记（省略时用 `[memory] sleep`），打印运行编号、模型调用次数、中止原因和每处改动（`O1` 合并、`O2` 较新的值、`O3` 找回的事实、`ADD`、`UPDATE`、`RETIRE`、`O4` 人名解析）。模型方式每次最多十二次请求。`melo serve` 或应用运行时退出码为 1。 |
+| `melo memory adapter rebuild` | 仅开发者模式（`[ui] mode = "developer"`，否则退出码 2）。根据笔记和对话重新构建个人查询适配器，用配置的嵌入模型为查询文本生成嵌入，打印各来源的配对数、留出集上训练前后的损失和排名以及步数；没有构建时打印原因（配对太少、没有提升、记忆关闭、没有嵌入模型、`sleep_lock`、新的聊天活动）。只有 `[memory] adapter` 开启时搜索才使用它。没有构建时退出码为 1。 |
 
 ```text
 $ melo memory list

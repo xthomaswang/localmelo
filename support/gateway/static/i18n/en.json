@@ -467,6 +467,7 @@
   "drawer.tools.revoke": "Revoke",
   "drawer.tools.revokeAll": "Revoke all grants",
   "drawer.tools.revokeOne": "Revoke {tool}",
+  "errors.adapterMemoryOff": "Memory across chats is off, so there are no notes to build an adapter from.",
   "errors.approvalAnswered": "This approval was answered already.",
   "errors.approvalNotFound": "Approval not found.",
   "errors.blankMessage": "text: the message must not be blank",

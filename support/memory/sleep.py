@@ -357,7 +357,8 @@ def _stale(text: str, turn: SleepTurn, turns: Sequence[SleepTurn]) -> bool:
     return False
 
 
-async def _check(lock: str, is_active: IsActive | None) -> None:
+async def check_idle(lock: str, is_active: IsActive | None) -> None:
+    """Raise when the lock file exists or the user is active: no work may start."""
     if lock and Path(lock).expanduser().exists():
         raise RuntimeError("sleep lock is held")
     if is_active is not None and await is_active():
@@ -397,7 +398,7 @@ class _FactGuard:
             return False
         if self.embed_note is not None and any(n.vector is not None for n in matching):
             if text not in self.vectors:
-                await _check(self.lock, self.is_active)
+                await check_idle(self.lock, self.is_active)
                 try:
                     async with asyncio.timeout(FACT_TIMEOUT):
                         self.vectors[text] = await self.embed_note(text)
@@ -642,7 +643,7 @@ class _ModelPass:
     guard: _FactGuard | None = None
 
     async def check(self) -> None:
-        await _check(self.lock, self.is_active)
+        await check_idle(self.lock, self.is_active)
 
     async def request(
         self, turn: SleepTurn, payload: dict[str, Any]

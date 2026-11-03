@@ -249,10 +249,10 @@ class Recall:
     *floor_rule* where it came from: ``fixed`` (``recall_min_cosine``), ``gather``
     (the lower ``gather_min_cosine`` bar) or ``relative`` (``recall_floor``: from the
     question's own similarities, :func:`~.recall.relative_floor`; a question whose
-    best match is under ``recall_min_cosine`` reports that number, which no vector
-    match reaches). *gather* is ``None`` with ``gather`` off; *floor* and *floor_rule*
-    are ``None`` with ``gather`` off and ``recall_floor`` ``fixed``. A ``None`` is left
-    out of :meth:`to_json`.
+    best match is under ``recall_min_cosine``, or a memory with too few items to
+    read a spread from, reports ``recall_min_cosine``). *gather* is ``None`` with
+    ``gather`` off; *floor* and *floor_rule* are ``None`` with ``gather`` off and
+    ``recall_floor`` ``fixed``. A ``None`` is left out of :meth:`to_json`.
     """
 
     retriever: str = "bm25"

@@ -62,8 +62,12 @@ MIN_COSINE: Final = 0.55
 GATHER_COSINE: Final = 0.40
 # With ``[memory] recall_floor = "relative"`` (``recall_floor_z``, 1.5-4.0): how many
 # standard deviations above the mean of the question's similarities its vector bar
-# sits. The bar is never lower than :data:`GATHER_COSINE`.
+# sits. The bar is never lower than :data:`GATHER_COSINE` and never higher than the
+# question's best similarity.
 RELATIVE_Z: Final = 2.5
+# Fewer items with a vector than this have no spread worth reading (the best of n
+# cannot stand out by more than (n - 1) / sqrt(n) deviations): the fixed bar is used.
+RELATIVE_MIN_ITEMS: Final = 20
 HALF_LIFE_DAYS: Final = 30.0
 PER_SESSION: Final = 2
 # What one turn recalls by itself, and the room its block may take. The last two are
@@ -848,17 +852,23 @@ def relative_floor(
     every item that has a vector): two steps, as in telling a familiar cue from
     background.
 
-    First the question must find anything familiar: when its best cosine is below
-    *min_cosine* there is no bar, ``None``, and no item joins the vector list.
-    Then an item must stand out from the rest for this question: the bar is the
-    mean of *cosines* plus *relative_z* standard deviations of them (the population
-    one), never lower than :data:`GATHER_COSINE`. It may lie above or below
-    *min_cosine*.
+    With fewer than :data:`RELATIVE_MIN_ITEMS` cosines the spread means nothing, and
+    the bar is *min_cosine*, the fixed one. Otherwise the question must first find
+    anything familiar: when its best cosine is below *min_cosine* there is no bar,
+    ``None``, and no item joins the vector list. Then an item must stand out from the
+    rest for this question: the bar is the mean of *cosines* plus *relative_z*
+    standard deviations of them (the population one), never lower than
+    :data:`GATHER_COSINE` and never higher than the best cosine, so the best item is
+    always listed once the gate is passed. It may lie above or below *min_cosine*.
     """
-    if not cosines or max(cosines) < min_cosine:
+    if len(cosines) < RELATIVE_MIN_ITEMS:
+        return min_cosine
+    best = max(cosines)
+    if best < min_cosine:
         return None
     spread = float(np.std(cosines))
-    return max(GATHER_COSINE, float(np.mean(cosines)) + relative_z * spread)
+    bar = max(GATHER_COSINE, float(np.mean(cosines)) + relative_z * spread)
+    return min(bar, best)
 
 
 def vector_floor(
@@ -870,7 +880,8 @@ def vector_floor(
 ) -> float | None:
     """The bar :func:`ranked` puts on the vector list with *relative_z*:
     :func:`relative_floor` of the cosines of every item of *corpus* that has a
-    vector; ``None`` when the question's best cosine is below *min_cosine*."""
+    vector: *min_cosine* with too few of them, ``None`` when the question's best
+    cosine is below *min_cosine*."""
     scored = vector_scores(corpus, query_vector, embed_model)
     return relative_floor([c for c, _ in scored], min_cosine, relative_z)
 

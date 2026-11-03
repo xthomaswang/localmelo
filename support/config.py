@@ -509,11 +509,12 @@ class MemoryConfig:
     ``gather_min_cosine`` (0.20-0.55, 0.40 by default) is that lower bar.
     Two more (#428) set the vector bar of a question: ``recall_floor``, ``fixed``
     (the default: ``recall_min_cosine`` for every question) or ``relative`` (a
-    question whose best
-    match reaches ``recall_min_cosine`` takes the larger of 0.40 and the mean of its
-    matches' similarities plus ``recall_floor_z`` standard deviations, and one whose
-    best match does not takes no vector match); ``recall_floor_z`` is 1.5-4.0, 2.5
-    by default. A question that ``gather`` widens keeps the ``gather`` bar.
+    question whose best match reaches ``recall_min_cosine`` takes the larger of 0.40
+    and the mean of its matches' similarities plus ``recall_floor_z`` standard
+    deviations, but never more than its best match, and one whose best match does
+    not takes no vector match; a memory with fewer than 20 items that have a vector
+    keeps ``recall_min_cosine``); ``recall_floor_z`` is 1.5-4.0, 2.5 by default. A
+    question that ``gather`` widens keeps the ``gather`` bar.
     ``project_instructions = "off"`` stops a
     task that the person made from reading the instruction file of its folder (``AGENTS.md``,
     ``CLAUDE.md`` or ``GEMINI.md``, the nearest first) when it starts.

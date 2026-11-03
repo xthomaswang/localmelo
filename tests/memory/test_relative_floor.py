@@ -25,6 +25,7 @@ from localmelo.support.memory.index import Document
 from localmelo.support.memory.recall import (
     GATHER_COSINE,
     MIN_COSINE,
+    RELATIVE_MIN_ITEMS,
     RELATIVE_Z,
     Corpus,
     ranked,
@@ -95,14 +96,22 @@ DENSE = (
     [0.56, 0.58, 0.61, 0.64, 0.67, 0.70, 0.73, 0.76],
     [0.40 + 0.0003 * n for n in range(60)],
 )
+# Two clusters far apart: mean + 2.5 sigma is over the best item, so the bar stops at it.
+SPLIT = ([0.72, *[0.70] * 14], [0.10] * 15)
+# One strong item over a background of thirty: the bar is 0.56, well under it.
+OUTLIER = ([0.80], [0.30 + 0.002 * n for n in range(29)])
 # The best item is under the fixed bar (0.55).
 WEAK = ([0.50, 0.46, 0.42], [0.05 + 0.001 * n for n in range(100)])
 
 
 def bar_of(corpus: tuple[list[float], list[float]], z: float = RELATIVE_Z) -> float:
-    """The relative bar of *corpus* worked out by hand (the best item is over 0.55)."""
-    cosines = np.asarray([*corpus[0], *corpus[1]])
-    return max(0.40, float(cosines.mean() + z * cosines.std()))
+    """The relative bar of *corpus* worked out by hand (the best item is over 0.55,
+    and the corpus has the least number of items)."""
+    values = [*corpus[0], *corpus[1]]
+    cosines, best = np.asarray(values), max(values)
+    assert len(values) >= RELATIVE_MIN_ITEMS and best >= 0.55
+    bar = max(0.40, float(cosines.mean() + z * cosines.std()))
+    return min(bar, best)
 
 
 def shown(block: str) -> list[str]:
@@ -167,6 +176,7 @@ def test_the_constants_and_the_defaults() -> None:
     assert MEMORY_RECALL_FLOOR == ("fixed", "relative")
     assert MEMORY_RECALL_FLOOR_Z == (1.5, 4.0)
     assert RELATIVE_Z == 2.5 and GATHER_COSINE == 0.40 and MIN_COSINE == 0.55
+    assert RELATIVE_MIN_ITEMS == 20
     assert RecallSettings().floor == "fixed" and RecallSettings().floor_z == 2.5
     assert RecallSettings().relative is False
 
@@ -199,7 +209,35 @@ def test_relative_floor_is_none_when_nothing_reaches_the_gate() -> None:
     # The gate is the recall bar the caller gives, and the best similarity counts.
     assert relative_floor(weak, 0.50, 2.5) is not None
     assert relative_floor(weak, 0.51, 2.5) is None
-    assert relative_floor([], 0.55, 2.5) is None
+
+
+def test_relative_floor_is_the_fixed_bar_with_too_few_items_to_read_a_spread_from() -> (
+    None
+):
+    few = [0.70, 0.52, 0.45, 0.42, 0.30]
+    assert relative_floor(few, 0.55, 2.5) == 0.55
+    assert relative_floor(few, 0.55, 1.5) == 0.55
+    assert relative_floor([], 0.55, 2.5) == 0.55
+    # The fixed bar also when the best is under it: nothing passes it either way.
+    assert relative_floor([0.50, 0.40], 0.55, 2.5) == 0.55
+    # One item short of the least number, and the least number: the rule starts.
+    rest = [0.10] * (RELATIVE_MIN_ITEMS - 2)
+    assert relative_floor([0.70, *rest], 0.55, 2.5) == 0.55
+    assert len(rest) + 2 == RELATIVE_MIN_ITEMS
+    assert relative_floor([0.70, 0.69, *rest], 0.55, 2.5) != 0.55
+    assert relative_floor([0.50, *rest, 0.40], 0.55, 2.5) is None
+
+
+def test_relative_floor_never_goes_over_the_best_similarity() -> None:
+    cosines = [*SPLIT[0], *SPLIT[1]]
+    assert len(cosines) == 30
+    assert np.mean(cosines) + 2.5 * np.std(cosines) > max(cosines)  # the rule alone
+    for z in (1.5, 2.5, 4.0):
+        assert relative_floor(cosines, 0.55, z) == max(cosines) == 0.72
+    # A bar under the best similarity is the rule's own.
+    outlier = [*OUTLIER[0], *OUTLIER[1]]
+    assert relative_floor(outlier, 0.55, 2.5) == pytest.approx(bar_of(OUTLIER))
+    assert bar_of(OUTLIER) < 0.80
 
 
 def corpus_of(cosines: list[float]) -> Corpus:
@@ -235,6 +273,26 @@ def test_ranked_with_relative_z_lists_the_items_over_the_question_s_own_bar() ->
     assert [item.key for item in lowered] == ["d:0", "d:1", "d:2"]
 
 
+def test_ranked_with_few_items_is_the_fixed_bar_and_lists_the_best_item_of_a_spread() -> (
+    None
+):
+    now = NOW + 1
+    few = corpus_of([0.70, 0.52, 0.45, 0.42, 0.30])
+    args = (few, "zebra yodel", QUERY_VECTOR, MODEL)
+    assert ranked(*args, now=now, relative_z=2.5) == ranked(*args, now=now)
+    assert [item.key for item in ranked(*args, now=now, relative_z=2.5)] == ["d:0"]
+    # The spread of thirty items would put the bar over every one of them.
+    split = corpus_of([*SPLIT[0], *SPLIT[1]])
+    args = (split, "zebra yodel", QUERY_VECTOR, MODEL)
+    assert len(ranked(*args, now=now)) == 15  # fixed: every item over 0.55
+    for z in (1.5, 2.5, 4.0):
+        listed_keys = [item.key for item in ranked(*args, now=now, relative_z=z)]
+        assert listed_keys == ["d:0"]  # the best item, and no other
+    outlier = corpus_of([*OUTLIER[0], *OUTLIER[1]])
+    found = ranked(outlier, "zebra yodel", QUERY_VECTOR, MODEL, now=now, relative_z=2.5)
+    assert [item.key for item in found] == ["d:0"]
+
+
 def test_vector_floor_is_the_bar_ranked_puts_on_the_vector_list() -> None:
     corpus = corpus_of([*MIDDLE[0], *MIDDLE[1]])
     assert vector_floor(corpus, QUERY_VECTOR, MODEL, 0.55, 2.5) == pytest.approx(
@@ -245,7 +303,8 @@ def test_vector_floor_is_the_bar_ranked_puts_on_the_vector_list() -> None:
     assert vector_floor(corpus, QUERY_VECTOR, MODEL, 0.55, 2.5) == pytest.approx(
         bar_of(MIDDLE), abs=1e-6
     )
-    assert vector_floor(corpus, QUERY_VECTOR, "another-model", 0.55, 2.5) is None
+    # With no item of that model there is nothing to read a spread from.
+    assert vector_floor(corpus, QUERY_VECTOR, "another-model", 0.55, 2.5) == 0.55
     weak = corpus_of([*WEAK[0], *WEAK[1]])
     assert vector_floor(weak, QUERY_VECTOR, MODEL, 0.55, 2.5) is None
 
@@ -420,6 +479,63 @@ async def test_a_bar_over_the_fixed_one_lists_fewer_items_than_the_fixed_bar(
     finally:
         await fixed.aclose()
         await relative.aclose()
+
+
+async def test_a_memory_of_few_items_lists_what_the_fixed_bar_lists(
+    tmp_path: Path, store: SessionStore
+) -> None:
+    # Five items with vectors: no spread to read, the bar is the fixed one. (Their
+    # spread alone would put the bar over the best item, 0.70, and list nothing.)
+    fixed, _, _ = await memory_of(tmp_path / "a", store, recall_form="list")
+    relative, _, _ = await memory_of(
+        tmp_path / "b", store, recall_form="list", recall_floor="relative"
+    )
+    try:
+        for question in (PLAIN, GATHER):
+            today = await ask(fixed, store, question)
+            found = await ask(relative, store, question)
+            assert found.block == today.block == AS_ALWAYS + listed(STRONG)
+            assert found.recall is not None
+            assert found.recall.floor == 0.55 and found.recall.floor_rule == "relative"
+        reply = await MemoryTools(relative).search(query=WORDS)
+        assert reply == await MemoryTools(fixed).search(query=WORDS) == listed(STRONG)
+    finally:
+        await fixed.aclose()
+        await relative.aclose()
+
+
+async def test_the_bar_stops_at_the_best_item_of_a_wide_spread(
+    tmp_path: Path, store: SessionStore
+) -> None:
+    fixed, _ = await memory_with(tmp_path / "a", store, SPLIT)
+    relative, _ = await memory_with(
+        tmp_path / "b", store, SPLIT, recall_floor="relative"
+    )
+    try:
+        today = await ask(fixed, store, PLAIN)
+        assert shown(today.block) == two([0.72, *[0.70] * 14])
+        found = await ask(relative, store, PLAIN)
+        assert shown(found.block) == two([0.72])  # the best item, and no other
+        assert found.recall is not None and found.recall.floor_rule == "relative"
+        assert found.recall.floor == pytest.approx(0.72, abs=1e-6)
+        assert shown(await MemoryTools(relative).search(query=WORDS)) == two([0.72])
+    finally:
+        await fixed.aclose()
+        await relative.aclose()
+
+
+async def test_one_strong_outlier_among_thirty_items_is_listed(
+    tmp_path: Path, store: SessionStore
+) -> None:
+    memory, _ = await memory_with(tmp_path, store, OUTLIER, recall_floor="relative")
+    try:
+        found = await ask(memory, store, PLAIN)
+        assert "0.80" in shown(found.block)
+        assert shown(found.block) == two([0.80])
+        assert found.recall is not None
+        assert found.recall.floor == pytest.approx(bar_of(OUTLIER), abs=1e-6)
+    finally:
+        await memory.aclose()
 
 
 async def test_the_excerpt_form_gets_the_relative_bar_too(

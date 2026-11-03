@@ -60,6 +60,10 @@ MIN_COSINE: Final = 0.55
 # gather`` is ``wide`` or ``guide`` (``gather_min_cosine``, 0.20-0.55): a category
 # question sits further from each item that answers it than a single-fact one does.
 GATHER_COSINE: Final = 0.40
+# With ``[memory] recall_floor = "relative"`` (``recall_floor_z``, 1.5-4.0): how many
+# standard deviations above the mean of the question's similarities its vector bar
+# sits. The bar is never lower than :data:`GATHER_COSINE`.
+RELATIVE_Z: Final = 2.5
 HALF_LIFE_DAYS: Final = 30.0
 PER_SESSION: Final = 2
 # What one turn recalls by itself, and the room its block may take. The last two are
@@ -823,6 +827,54 @@ class Corpus:
         return {key for key in self.items if key.startswith(prefix)}
 
 
+def vector_scores(
+    corpus: Corpus, query_vector: np.ndarray, embed_model: str
+) -> list[tuple[float, str]]:
+    """The cosine of each item of *corpus* that has a vector of *embed_model* (of the
+    shape of *query_vector*) to *query_vector*, with the item's key."""
+    return [
+        (float(np.dot(query_vector, item.vector)), key)
+        for key, item in corpus.items.items()
+        if item.vector is not None
+        and item.embed_model == embed_model
+        and item.vector.shape == query_vector.shape
+    ]
+
+
+def relative_floor(
+    cosines: Sequence[float], min_cosine: float, relative_z: float
+) -> float | None:
+    """The vector bar of a question from its own similarities (*cosines*, those of
+    every item that has a vector): two steps, as in telling a familiar cue from
+    background.
+
+    First the question must find anything familiar: when its best cosine is below
+    *min_cosine* there is no bar, ``None``, and no item joins the vector list.
+    Then an item must stand out from the rest for this question: the bar is the
+    mean of *cosines* plus *relative_z* standard deviations of them (the population
+    one), never lower than :data:`GATHER_COSINE`. It may lie above or below
+    *min_cosine*.
+    """
+    if not cosines or max(cosines) < min_cosine:
+        return None
+    spread = float(np.std(cosines))
+    return max(GATHER_COSINE, float(np.mean(cosines)) + relative_z * spread)
+
+
+def vector_floor(
+    corpus: Corpus,
+    query_vector: np.ndarray,
+    embed_model: str,
+    min_cosine: float,
+    relative_z: float,
+) -> float | None:
+    """The bar :func:`ranked` puts on the vector list with *relative_z*:
+    :func:`relative_floor` of the cosines of every item of *corpus* that has a
+    vector; ``None`` when the question's best cosine is below *min_cosine*."""
+    scored = vector_scores(corpus, query_vector, embed_model)
+    return relative_floor([c for c, _ in scored], min_cosine, relative_z)
+
+
 def ranked(
     corpus: Corpus,
     query: str,
@@ -834,14 +886,17 @@ def ranked(
     keep_from_turn: int | None = None,
     coverage: float = MIN_COVERAGE,
     min_cosine: float = MIN_COSINE,
+    relative_z: float | None = None,
 ) -> list[Item]:
     """The items that pass the bars for *query*, best first.
 
     *coverage* is the share of the question's content words an item must hold
     to join the BM25 list; a small one lets loose candidates through.
     *min_cosine* is the least similarity a vector needs to join the vector
-    list. The turns of *exclude_session* from *keep_from_turn* on (all of them
-    without one) are left out (:func:`in_view`).
+    list. With *relative_z* the vector bar comes from the question's own
+    similarities instead (:func:`relative_floor`). The turns of *exclude_session*
+    from *keep_from_turn* on (all of them without one) are left out
+    (:func:`in_view`).
     """
     wanted = gate_terms(query)
     lists: list[list[str]] = []
@@ -850,14 +905,15 @@ def ranked(
         hits = corpus.index.search(stemmed(query), len(corpus.items))
         lists.append([k for k, _ in hits if len(wanted & corpus.terms[k]) >= need])
     if query_vector is not None:
-        scored = [
-            (float(np.dot(query_vector, item.vector)), key)
-            for key, item in corpus.items.items()
-            if item.vector is not None
-            and item.embed_model == embed_model
-            and item.vector.shape == query_vector.shape
-        ]
-        lists.append([k for c, k in sorted(scored, reverse=True) if c >= min_cosine])
+        scored = vector_scores(corpus, query_vector, embed_model)
+        bar: float | None = min_cosine
+        if relative_z is not None:
+            bar = relative_floor([c for c, _ in scored], min_cosine, relative_z)
+        lists.append(
+            []
+            if bar is None
+            else [k for c, k in sorted(scored, reverse=True) if c >= bar]
+        )
     fused: dict[str, float] = {}
     for keys in lists:
         for position, key in enumerate(keys):

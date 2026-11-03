@@ -79,6 +79,8 @@ from localmelo.support.config import (
     MEMORY_NOTE_MIN_COSINE,
     MEMORY_RECALL_CHARS,
     MEMORY_RECALL_DOCS,
+    MEMORY_RECALL_FLOOR,
+    MEMORY_RECALL_FLOOR_Z,
     MEMORY_RECALL_ITEM_CHARS,
     MEMORY_RECALL_LIST_MAX,
     MEMORY_RECALL_MIN_COSINE,
@@ -130,6 +132,7 @@ from localmelo.support.memory.recall import (
     MIN_COVERAGE,
     OPEN_CHARS,
     PER_SESSION,
+    RELATIVE_Z,
     SIDE_SUMMARY,
     WHOLE,
     Corpus,
@@ -154,6 +157,7 @@ from localmelo.support.memory.recall import (
     times,
     turn_said,
     unit,
+    vector_floor,
     whole_turn,
 )
 
@@ -241,9 +245,14 @@ class Recall:
     turns, :func:`follow_up_query`) or ``none`` (nothing: no recall ran).
     With ``[memory] gather`` on (``wide`` or ``guide``), *gather* says the message
     asks to count, total or compare and speaks of its speaker
-    (:func:`~.recall.asks_to_gather`) and *floor*
-    is the vector bar the search used; both are ``None``, and left out of
-    :meth:`to_json`, with it off.
+    (:func:`~.recall.asks_to_gather`). *floor* is the vector bar the search used and
+    *floor_rule* where it came from: ``fixed`` (``recall_min_cosine``), ``gather``
+    (the lower ``gather_min_cosine`` bar) or ``relative`` (``recall_floor``: from the
+    question's own similarities, :func:`~.recall.relative_floor`; a question whose
+    best match is under ``recall_min_cosine`` reports that number, which no vector
+    match reaches). *gather* is ``None`` with ``gather`` off; *floor* and *floor_rule*
+    are ``None`` with ``gather`` off and ``recall_floor`` ``fixed``. A ``None`` is left
+    out of :meth:`to_json`.
     """
 
     retriever: str = "bm25"
@@ -260,13 +269,13 @@ class Recall:
     query_from: str = "message"
     gather: bool | None = None
     floor: float | None = None
+    floor_rule: str | None = None
 
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
-        if self.gather is None:
-            del data["gather"]
-        if self.floor is None:
-            del data["floor"]
+        for name in ("gather", "floor", "floor_rule"):
+            if data[name] is None:
+                del data[name]
         return data
 
 
@@ -299,10 +308,13 @@ class RecallSettings(NamedTuple):
     an excerpt that shows less than the whole turn carries the turn's id and the model
     may open it (:attr:`opens_excerpts`). *gather* is ``[memory] gather`` (``off``,
     ``wide`` or ``guide``) and *gather_floor* ``gather_min_cosine``: the vector bar
-    of a question that counts, totals or compares. The defaults are the shipped
+    of a question that counts, totals or compares. *floor* is ``[memory]
+    recall_floor`` (``fixed`` or ``relative``) and *floor_z* ``recall_floor_z``: with
+    ``relative`` the vector bar of any other question comes from its own similarities
+    (:func:`~.recall.relative_floor`). The defaults are the shipped
     ones: a block of :data:`BLOCK_CHARS` and a turn of :data:`ITEM_CHARS` (#349),
-    *followup* and *excerpt_open* on, *gather* off, and what recall did before these
-    were settings for the rest.
+    *followup* and *excerpt_open* on, *gather* off, *floor* ``fixed``, and what recall
+    did before these were settings for the rest.
     """
 
     records: int = AUTO_RECORDS
@@ -323,6 +335,8 @@ class RecallSettings(NamedTuple):
     excerpt_open: bool = True
     gather: str = "off"
     gather_floor: float = GATHER_COSINE
+    floor: str = "fixed"
+    floor_z: float = RELATIVE_Z
 
     @property
     def opens_excerpts(self) -> bool:
@@ -348,6 +362,12 @@ class RecallSettings(NamedTuple):
         """The vector bar of a list-form search that looks wider: the lower of the
         recall bar and ``gather_min_cosine``."""
         return min(self.min_cosine, self.gather_floor)
+
+    @property
+    def relative(self) -> bool:
+        """Whether the vector bar comes from the question's own similarities
+        (``[memory] recall_floor`` is ``relative``)."""
+        return self.floor == "relative"
 
 
 def _guide(settings: RecallSettings, gathers: bool) -> str:
@@ -909,6 +929,7 @@ class ChatMemory:
             return RecallSettings()
         memory = cfg.memory
         gathering = getattr(memory, "gather", "off")
+        flooring = getattr(memory, "recall_floor", "fixed")
 
         def bounded(name: str, default: int, bounds: tuple[int, int]) -> int:
             value = getattr(memory, name, default)
@@ -939,6 +960,8 @@ class ChatMemory:
             getattr(memory, "excerpt_open", "on") != "off",
             gathering if gathering in MEMORY_GATHER else "off",
             bar("gather_min_cosine", GATHER_COSINE, MEMORY_GATHER_MIN_COSINE),
+            flooring if flooring in MEMORY_RECALL_FLOOR else "fixed",
+            bar("recall_floor_z", RELATIVE_Z, MEMORY_RECALL_FLOOR_Z),
         )
 
     def note_settings(self) -> NoteSettings:
@@ -1110,6 +1133,7 @@ class ChatMemory:
         recall: Recall | None = None,
         listing: bool = False,
         min_cosine: float | None = None,
+        relative_z: float | None = None,
     ) -> list[Item]:
         """The items that match *query*; embeds it when the retriever uses vectors.
 
@@ -1117,7 +1141,10 @@ class ChatMemory:
         without one) are left out: the chat shows them. *recall*, when given,
         is filled in with how the search went. With *listing* (the list form)
         a chat's turns are not capped and each carries its similarity. With
-        *min_cosine* the vector bar is that, not ``recall_min_cosine``.
+        *min_cosine* the vector bar is that, not ``recall_min_cosine``. With
+        *relative_z* it comes from the question's own similarities
+        (:func:`~.recall.relative_floor`), *min_cosine* being the best similarity it
+        needs to match anything at all.
         """
         query = query[:_QUERY_CHARS]
         recall = recall if recall is not None else Recall()
@@ -1136,6 +1163,7 @@ class ChatMemory:
             min_cosine=bars.min_cosine if min_cosine is None else min_cosine,
             min_coverage=bars.min_coverage,
             listing=listing,
+            relative_z=relative_z,
         )
 
     async def _find(
@@ -1152,6 +1180,7 @@ class ChatMemory:
         min_cosine: float = MIN_COSINE,
         min_coverage: float = MIN_COVERAGE,
         listing: bool = False,
+        relative_z: float | None = None,
     ) -> list[Item]:
         """Rank for *query* as the retriever says; the numbers go to *recall*.
 
@@ -1160,12 +1189,16 @@ class ChatMemory:
         *min_coverage* are the bars of the ranking; the loose candidates of the
         ``llm`` retriever take no coverage bar and no vectors. With *listing*
         (the list form) no cap on a chat's turns applies, and a turn matched by
-        meaning carries its cosine (:attr:`Item.similarity`).
+        meaning carries its cosine (:attr:`Item.similarity`). With *relative_z*
+        and a query vector the vector bar is the question's own
+        (:func:`~.recall.relative_floor`, *min_cosine* its gate), and ``recall.floor``
+        is the bar that came out (*min_cosine* when no match reached the gate).
         """
         mode = self.retriever()
         recall.retriever, recall.fallback = _resolve(mode, embedded.failure)
         started = time.perf_counter()
         vector = unit(embedded.vectors[0]) if embedded.vectors else None
+        floor = min_cosine
         async with self._lock:
             corpus = await self._sync()
             now = clock.now()  # LOCALMELO_NOW pins it
@@ -1179,7 +1212,14 @@ class ChatMemory:
                 keep_from_turn=keep_from_turn,
                 coverage=min_coverage,
                 min_cosine=min_cosine,
+                relative_z=relative_z,
             )
+            if relative_z is not None and vector is not None:
+                bar = vector_floor(
+                    corpus, vector, embedded.model, min_cosine, relative_z
+                )
+                floor = min_cosine if bar is None else bar
+                recall.floor = floor
             loose = (
                 ranked(
                     corpus,
@@ -1227,7 +1267,7 @@ class ChatMemory:
                     if item.is_record
                     else replace(
                         item,
-                        similarity=meaning_of(item, vector, embedded.model, min_cosine),
+                        similarity=meaning_of(item, vector, embedded.model, floor),
                     )
                 )
                 for item in items
@@ -1463,7 +1503,10 @@ class ChatMemory:
         recall = Recall()
         budget = self.recall_settings()
         if budget.gathers:
-            recall.gather, recall.floor = False, budget.min_cosine
+            recall.gather = False
+        if budget.gathers or budget.relative:
+            recall.floor = budget.min_cosine
+            recall.floor_rule = "relative" if budget.relative else "fixed"
         # A message with no content of its own ("go look it up", "continue") is
         # searched with what the person said last in this chat, not with its own
         # words, which match whatever holds them. With no earlier turn to follow
@@ -1496,11 +1539,20 @@ class ChatMemory:
         recall.embed_ms = elapsed_ms(started)
         # A question that counts, totals or compares needs every item of a kind,
         # which sit further from it than one answer to a single fact does: the list
-        # form looks wider for it (``[memory] gather``). Nothing else changes.
+        # form looks wider for it (``[memory] gather``). Every other question has
+        # the one bar, or, with ``recall_floor = "relative"``, the bar its own
+        # similarities set. Nothing else changes.
         gathers = budget.gathers and asks_to_gather(query)
-        floor = budget.wide_floor if gathers and budget.listing else budget.min_cosine
+        wide = gathers and budget.listing
+        floor = budget.wide_floor if wide else budget.min_cosine
+        relative = budget.relative and not wide
         if budget.gathers:
-            recall.gather, recall.floor = gathers, floor
+            recall.gather = gathers
+        if budget.gathers or budget.relative:
+            recall.floor = floor
+            recall.floor_rule = (
+                "gather" if wide else "relative" if relative else "fixed"
+            )
         used = await self._find(
             query,
             embedded,
@@ -1513,6 +1565,7 @@ class ChatMemory:
             min_cosine=floor,
             min_coverage=budget.min_coverage,
             listing=budget.listing,
+            relative_z=budget.floor_z if relative else None,
         )
         # The block gives the current value only: a turn a newer note replaced
         # stays out unless the message asks about the past. Notes of one subject
@@ -3239,6 +3292,13 @@ class MemoryTools(BaseToolProvider):
         turns_k = (
             settings.list_max if k is None else max(1, min(int(k), settings.list_max))
         )
+        # With ``gather`` on, every list-form search goes down to the gather bar; with
+        # ``recall_floor = "relative"`` too only in a turn that counts or compares,
+        # and any other search sets its bar from its own similarities.
+        fired = chat is not None and bool(
+            chat.memory.recall is not None and chat.memory.recall.gather
+        )
+        wide = settings.gathers and (fired or not settings.relative)
         items = await self._memory.search(
             query,
             records_k=0 if scope == "chats" else notes_k,
@@ -3246,7 +3306,8 @@ class MemoryTools(BaseToolProvider):
             exclude_session=own.info.session_id if own else "",
             keep_from_turn=own.keep_from_turn if own else None,
             listing=True,
-            min_cosine=settings.wide_floor if settings.gathers else None,
+            min_cosine=settings.wide_floor if wide else None,
+            relative_z=settings.floor_z if settings.relative and not wide else None,
         )
         notes = [item for item in items if item.is_record][:notes_k]
         turns = [item for item in items if not item.is_record][:turns_k]
@@ -3262,10 +3323,7 @@ class MemoryTools(BaseToolProvider):
             chat.add_searched([*notes, *turns])
         lines = [f"{n}. {item.shown}" for n, item in enumerate(notes, 1)]
         if turns:
-            gathers = chat is not None and bool(
-                chat.memory.recall is not None and chat.memory.recall.gather
-            )
-            lines.append(_guide(settings, gathers))
+            lines.append(_guide(settings, fired))
             lines.extend(item.shown for item in turns)
         return "\n".join(lines)
 

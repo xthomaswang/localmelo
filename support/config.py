@@ -110,6 +110,11 @@ MEMORY_RECALL_MIN_COVERAGE = (0.10, 1.00)
 # vector bar it uses then: see MemoryConfig.gather and gather_min_cosine.
 MEMORY_GATHER = ("off", "wide", "guide")
 MEMORY_GATHER_MIN_COSINE = (0.20, 0.55)
+# Whether the vector bar is one fixed number or comes from the question's own
+# similarities, and how many standard deviations above their mean it sits then: see
+# MemoryConfig.recall_floor and recall_floor_z.
+MEMORY_RECALL_FLOOR = ("fixed", "relative")
+MEMORY_RECALL_FLOOR_Z = (1.5, 4.0)
 # How far back a new chat's first turn looks into the other chats: see
 # ChatConfig.recent_digest_minutes (0 turns it off).
 CHAT_RECENT_DIGEST_MINUTES = (0, 1440)
@@ -151,6 +156,8 @@ RECALL_KEYS = (
     "followup_query",
     "gather",
     "gather_min_cosine",
+    "recall_floor",
+    "recall_floor_z",
 )
 RECALL_TRIGGERS = ("start", "attempt", "step", "tool")
 RECALL_KINDS = ("note", "draft", "thought", "digest", "reflection", "long")
@@ -500,6 +507,13 @@ class MemoryConfig:
     or ``guide`` (``wide`` and one more sentence under the list that says to open every
     item that may belong and to search again for each kind not listed yet);
     ``gather_min_cosine`` (0.20-0.55, 0.40 by default) is that lower bar.
+    Two more (#428) set the vector bar of a question: ``recall_floor``, ``fixed``
+    (the default: ``recall_min_cosine`` for every question) or ``relative`` (a
+    question whose best
+    match reaches ``recall_min_cosine`` takes the larger of 0.40 and the mean of its
+    matches' similarities plus ``recall_floor_z`` standard deviations, and one whose
+    best match does not takes no vector match); ``recall_floor_z`` is 1.5-4.0, 2.5
+    by default. A question that ``gather`` widens keeps the ``gather`` bar.
     ``project_instructions = "off"`` stops a
     task that the person made from reading the instruction file of its folder (``AGENTS.md``,
     ``CLAUDE.md`` or ``GEMINI.md``, the nearest first) when it starts.
@@ -536,6 +550,8 @@ class MemoryConfig:
     followup_query: str = "recent"  # recent | message: what "continue" searches with.
     gather: str = "off"  # off | wide | guide: recall looks wider to count or compare.
     gather_min_cosine: float = 0.40  # The vector bar for such a question.
+    recall_floor: str = "fixed"  # fixed | relative: the vector bar of a question.
+    recall_floor_z: float = 2.5  # Standard deviations above the mean, if relative.
     project_instructions: str = "on"  # on | off: a task reads its folder's AGENTS.md.
 
 
@@ -886,6 +902,7 @@ class Config:
             ("recall_min_coverage", MEMORY_RECALL_MIN_COVERAGE),
             ("note_min_cosine", MEMORY_NOTE_MIN_COSINE),
             ("gather_min_cosine", MEMORY_GATHER_MIN_COSINE),
+            ("recall_floor_z", MEMORY_RECALL_FLOOR_Z),
         ):
             value = getattr(self.memory, name)
             if not isinstance(value, int | float) or isinstance(value, bool):
@@ -903,6 +920,7 @@ class Config:
             ("note_gate", MEMORY_NOTE_GATE),
             ("followup_query", MEMORY_FOLLOWUP_QUERY),
             ("gather", MEMORY_GATHER),
+            ("recall_floor", MEMORY_RECALL_FLOOR),
             ("recall_source", MEMORY_RECALL_SOURCE),
             ("open_sources", MEMORY_OPEN_SOURCES),
             ("project_instructions", MEMORY_PROJECT_INSTRUCTIONS),

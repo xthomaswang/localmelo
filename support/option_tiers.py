@@ -156,6 +156,8 @@ EXPERIMENTAL_KEYS: dict[str, str] = {
     "memory.followup_query": "#452",
     "memory.gather": "#428",
     "memory.gather_min_cosine": "#428",
+    "memory.recall_floor": "#428",
+    "memory.recall_floor_z": "#428",
     "approvals.auto_asks": "#465",
 }
 

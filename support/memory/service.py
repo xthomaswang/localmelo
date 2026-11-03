@@ -75,6 +75,7 @@ from localmelo.support.config import (
     MEMORY_COMPRESS_PARALLEL,
     MEMORY_NOTE_GATE,
     MEMORY_NOTE_MIN_COSINE,
+    MEMORY_NOTES_TEXT,
     MEMORY_RECALL_CHARS,
     MEMORY_RECALL_DOCS,
     MEMORY_RECALL_ITEM_CHARS,
@@ -909,6 +910,17 @@ class ChatMemory:
             level if level in MEMORY_NOTE_GATE else note_gate.TYPED,
             float(bar) if fits and low <= bar <= high else note_gate.MIN_COSINE,
         )
+
+    def notes_text(self) -> str:
+        """``[memory] notes_text`` of the settings now: ``full`` or ``dedup``.
+
+        It picks the memory guide of a chat's instructions when its Agent is built
+        (:func:`~localmelo.support.sessions.agents.build_session_agent`). No config
+        file, or a value that is neither, reads as ``full``, the guide as it was.
+        """
+        cfg = self._settings()
+        value = getattr(cfg.memory, "notes_text", "full") if cfg is not None else "full"
+        return value if value in MEMORY_NOTES_TEXT else "full"
 
     def chat_provider(self) -> BaseLLMProvider | None:
         """The chat model of the settings now, for ``llm`` recall; ``None`` if not set up."""

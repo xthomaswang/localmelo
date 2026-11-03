@@ -379,12 +379,14 @@ async def build_session_agent(
     providers = load_mcp_providers(mcp_config) if mcp_config else []
     providers.extend(tools)
     notes: str | None = None
+    notes_text = "full"
     if memory is not None and memory.enabled:
         try:
             notes = await memory.pinned_quotes()
         except Exception:  # a chat still opens without its pinned notes
             logging.getLogger(__name__).warning("Could not read notes", exc_info=True)
             notes = ""
+        notes_text = memory.notes_text()  # [memory] notes_text, -X included
         providers.append(memory.tools())
     if browser_driver != "off":
         from localmelo.support.browser import provider_for
@@ -485,10 +487,10 @@ async def build_session_agent(
         identity = None
         if base_url:
             kept = kept_across_chats(agent_options, has_embedding=embedding is not None)
-            identity = url_identity(base_url, model, kept, notes)
+            identity = url_identity(base_url, model, kept, notes, notes_text)
         elif cfg is not None:
             kept = kept_across_chats(agent_options, has_embedding=cfg.has_embedding)
-            identity = config_identity(cfg, kept, notes)
+            identity = config_identity(cfg, kept, notes, notes_text)
         agent_options = dataclasses.replace(agent_options, identity=identity)
     try:
         if not from_config:

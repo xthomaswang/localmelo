@@ -12,11 +12,14 @@ connect.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
+import localmelo.__main__ as cli
 from localmelo.melo.agent import Agent, AgentOptions
 from localmelo.melo.contracts.tools import BaseToolProvider, ProvidedTool
+from localmelo.support import config
 from localmelo.support.backends import discovery
 from localmelo.support.cli.agents import AgentFactory, config_backend, url_backend
 from localmelo.support.config import CloudVendorConfig, Config, LocalBackendConfig
@@ -34,6 +37,9 @@ from localmelo.support.sessions.identity import (
     KEPT_LEGACY,
     KEPT_TYPED,
     LANGUAGE_RULE,
+    NOTES_TEXT,
+    NOTES_TEXT_DEDUP,
+    PINNED_TEXT,
     SUBJECT_RULE,
     config_identity,
     host_of,
@@ -669,3 +675,200 @@ def test_the_notes_text_says_the_model_sees_only_the_recent_messages_of_the_conv
     assert "search_memory looks up more" in NOTES_TEXT
     # The chat without notes says the same of the window: recent messages.
     assert ALONE.startswith("You remember the recent messages of this chat")
+
+
+# ``[memory] notes_text``: the memory guide of a chat with notes, whole or deduplicated.
+
+# One short phrase for each rule the shorter guide keeps.
+KEPT_RULES = (
+    "Reminders are scheduled",
+    "in a file or with code",
+    "already saved",
+    "one short sentence",
+    "counts as much as a note",
+    "the newest one is true",
+    "leave out other remembered facts",
+    "search_memory looks up more",
+    "not memory",
+    "how your memory works inside",
+)
+# What the remember tool's description says, so the guide does not repeat it.
+LEFT_TO_THE_TOOL = ("Utrecht", "second person", "Acme")
+PINNED = "- “I prefer tea”"
+
+
+def every_identity(notes: str | None, notes_text: str | None = None) -> list[str]:
+    """The identity as each builder makes it; *notes_text* None leaves the default."""
+    extra: dict[str, Any] = {} if notes_text is None else {"notes_text": notes_text}
+    return [
+        url_identity(URL, MODEL, KEPT_TYPED, notes, **extra),
+        config_identity(local(), KEPT_TYPED, notes, **extra),
+        identity_text(None, "Local Server", local=True, notes=notes, **extra),
+        identity_text("big-model", "Cloud", local=False, notes=notes, **extra),
+    ]
+
+
+@pytest.mark.parametrize("notes", [None, "", PINNED])
+def test_the_notes_text_is_whole_by_default_and_every_identity_is_as_it_was(
+    notes: str | None,
+) -> None:
+    whole = every_identity(notes)
+    # The default is "full", and a value that is not "dedup" reads as "full".
+    for value in ("full", "", "short"):
+        assert every_identity(notes, value) == whole
+    if notes is None:  # no notes text at all, whatever the setting says
+        assert every_identity(notes, "dedup") == whole
+        for text in whole:
+            assert NOTES_TEXT not in text and NOTES_TEXT_DEDUP not in text
+    else:
+        for text in whole:
+            assert NOTES_TEXT in text and NOTES_TEXT_DEDUP not in text
+
+
+@pytest.mark.parametrize("notes", ["", PINNED])
+def test_dedup_gives_the_shorter_text_in_place_of_the_whole_one(notes: str) -> None:
+    whole = every_identity(notes)
+    for text, as_was in zip(every_identity(notes, "dedup"), whole, strict=True):
+        assert NOTES_TEXT_DEDUP in text and NOTES_TEXT not in text
+        assert memory_line(text) == NOTES_TEXT_DEDUP
+        for words in LEFT_TO_THE_TOOL:
+            assert words not in text
+        # Only the memory paragraph differs from the whole one.
+        assert as_was.replace(NOTES_TEXT, "X") == text.replace(NOTES_TEXT_DEDUP, "X")
+    assert "\n" not in NOTES_TEXT_DEDUP
+    assert len(NOTES_TEXT_DEDUP) < len(NOTES_TEXT)
+
+
+def test_the_shorter_text_keeps_the_trigger_and_every_rule_that_has_no_other_home() -> (
+    None
+):
+    for rule in KEPT_RULES:
+        assert rule in NOTES_TEXT_DEDUP, rule
+        assert rule in NOTES_TEXT, rule  # the whole text says each of them too
+    # The trigger: lasting facts, in that turn, without asking; the how-to is the tool's.
+    assert (
+        "When the user tells you something lasting about themselves or their work, "
+        "or a change to it, or a finished task's result is worth keeping, call "
+        "remember in that turn without asking; its description says how to write "
+        "the note." in NOTES_TEXT_DEDUP
+    )
+    # The promises of the whole text that stay.
+    for promise in (
+        "the user sees each note under their message and can undo it",
+        "the note is already saved (the message says what was kept)",
+        "Each memory item names where it came from",
+        "an item marked older was replaced by a newer note or message",
+        "Answer with the newest value only",
+        "answer in one or two plain sentences",
+    ):
+        assert promise in NOTES_TEXT_DEDUP, promise
+    # The how-to is in the tool only: the example, the person and the language.
+    for words in ("Utrecht", "second person", "Acme", "Never ask whether"):
+        assert words not in NOTES_TEXT_DEDUP
+        assert words in NOTES_TEXT
+
+
+def test_the_remember_tool_still_says_how_to_write_a_note() -> None:
+    from localmelo.support.memory.service import REMEMBER
+
+    for words in ("Utrecht", "second person", "never ask the user first", "language"):
+        assert words in REMEMBER.description
+
+
+@pytest.mark.parametrize("setting", ["full", "dedup"])
+def test_the_pinned_notes_follow_the_text_in_both_settings(setting: str) -> None:
+    guide = NOTES_TEXT_DEDUP if setting == "dedup" else NOTES_TEXT
+    for text in (
+        url_identity(URL, MODEL, notes=PINNED, notes_text=setting),
+        config_identity(local(), notes=PINNED, notes_text=setting),
+    ):
+        assert f"{guide}\n{PINNED_TEXT}{PINNED}\n" in text
+        assert text.index(PINNED_TEXT) < text.index("Reply in the language and script")
+        assert text.count(PINNED_TEXT) == 1
+
+
+async def test_x_notes_text_reaches_the_identity_of_every_console_chat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from localmelo.support.memory import ChatMemory
+
+    monkeypatch.setattr(config, "CONFIG_PATH", str(tmp_path / "config.toml"))
+    monkeypatch.setattr(config, "CONFIG_DIR", str(tmp_path))
+
+    def served() -> Config:
+        """The config a served console holds: the file, then each ``-X``."""
+        cfg = config.load()
+        cfg.chat_backend, cfg.embedding_backend = "vllm", "none"
+        cfg.vllm = LocalBackendConfig(chat_url=URL, chat_model=MODEL)
+        return cfg
+
+    async def identities(cfg: Config) -> list[str]:
+        memory = ChatMemory(lambda: cfg, directory=str(tmp_path / "memory"))
+        workspace = str(tmp_path)
+        agents = [
+            await build_session_agent(
+                cfg=cfg,
+                base_url=None,
+                model=None,
+                workspace=workspace,
+                identify=True,
+                memory=memory,
+            ),
+            await default_builder(
+                cfg,
+                workspace,
+                None,
+                "s1",
+                memory=memory,
+                tools=[NoTools()],
+                agent_class=SideAgent,
+            ),
+            await build_front_agent(
+                cfg, workspace, "s2", tools=NoTools(), memory=memory
+            ),
+        ]
+        try:
+            return [agent.chat.identity or "" for agent in agents]
+        finally:
+            for agent in agents:
+                await agent.close()
+            await memory.aclose()
+
+    # Not set: every chat has the whole text.
+    for identity in await identities(served()):
+        assert NOTES_TEXT in identity and NOTES_TEXT_DEDUP not in identity
+    # -X for one run: every chat has the shorter one, and nothing else changes.
+    cli._parse(["-X", "memory.notes_text=dedup", "--base-url", URL, "q"])
+    assert config.overrides() == {"memory.notes_text": "dedup"}
+    cfg = served()
+    assert cfg.memory.notes_text == "dedup"
+    for identity in await identities(cfg):
+        assert NOTES_TEXT_DEDUP in identity and NOTES_TEXT not in identity
+        assert memory_line(identity) == NOTES_TEXT_DEDUP
+        assert identity.startswith(WHO)
+    # The file is not changed by it, and the next run without -X is whole again.
+    assert not (tmp_path / "config.toml").exists()
+    config.set_overrides({})
+    for identity in await identities(served()):
+        assert NOTES_TEXT in identity and NOTES_TEXT_DEDUP not in identity
+
+
+async def test_the_chat_memory_reads_the_setting_now_and_a_bad_value_as_the_whole_text(
+    tmp_path: Path,
+) -> None:
+    from localmelo.support.memory import ChatMemory
+
+    cfg = local()
+    memory = ChatMemory(lambda: cfg, directory=str(tmp_path / "memory"))
+    assert (
+        ChatMemory(lambda: None, directory=str(tmp_path / "m")).notes_text() == "full"
+    )
+    try:
+        assert memory.notes_text() == "full"
+        for value, read in (("dedup", "dedup"), ("full", "full"), ("short", "full")):
+            cfg.memory.notes_text = value
+            assert memory.notes_text() == read
+        cfg.memory.notes_text = None  # type: ignore[assignment]
+        assert memory.notes_text() == "full"
+    finally:
+        await memory.aclose()

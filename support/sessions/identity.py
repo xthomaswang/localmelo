@@ -129,6 +129,35 @@ NOTES_TEXT: Final = (
     "you remember, answer in one or two plain sentences and do not describe how "
     "your memory works inside."
 )
+# ``[memory] notes_text = "dedup"`` (#428, a developer setting for a measurement): the
+# same guide without the how-to of writing a note, which the ``remember`` tool's
+# description carries and says once (the example, the second person, never asking
+# first, the language of the message, a new note replaces the old one). The trigger
+# stays here, with the reading rules and every rule that has no other home; the
+# recall block's header says that "you" in a note is the user.
+NOTES_TEXT_DEDUP: Final = (
+    "You remember the recent messages of this conversation, not all of it. Older "
+    "parts of it, earlier chats and notes about the user that localmelo keeps on "
+    "this computer come back with the user's message when they match, as melo's "
+    "memory; the user sees each note under their message and can undo it. When "
+    "the user tells you something lasting about themselves or their work, or a "
+    "change to it, or a finished task's result is worth keeping, call remember in "
+    "that turn without asking; its description says how to write the note. "
+    "Reminders are scheduled, not noted: when the user asks to be reminded of "
+    "something at a time, do not save it as a note. Never save a note, or what "
+    "the user says about themselves, in a file or with code. When the user asks "
+    "you to remember something, the note is already saved (the message says what "
+    "was kept). Acknowledge a note in one short sentence. Each memory item names "
+    "where it came from. Use the items to answer whether or not they were kept as "
+    "notes: an earlier message of this chat or another counts as much as a note. "
+    "When notes or earlier chats disagree, the newest one is true; an item marked "
+    "older was replaced by a newer note or message. Answer with the newest value "
+    "only, and mention an older value only when the user asks about the past. Use "
+    "only the notes that answer the question; leave out other remembered facts. "
+    "search_memory looks up more. Files in the user's folder are not memory. If "
+    "asked what you remember, answer in one or two plain sentences and do not "
+    "describe how your memory works inside."
+)
 PINNED_TEXT: Final = "What the user has told you about themselves, in their words:\n"
 _THIS_CHAT: Final = "You remember the recent messages of this chat"
 _ALONE: Final = _THIS_CHAT + ", and nothing from other chats."
@@ -194,6 +223,7 @@ def identity_text(
     url: str = "",
     kept: str = "",
     notes: str | None = None,
+    notes_text: str = "full",
 ) -> str:
     """The identity paragraph for a chat on *model*, served by *server*.
 
@@ -205,7 +235,9 @@ def identity_text(
     what the Agent keeps across chats (:func:`kept_across_chats`); ``""`` says
     it keeps this chat's messages only. *notes*, when not ``None``, says the
     chat has memory across chats (:data:`NOTES_TEXT`) and lists the user's own
-    words it pins, one ``- …`` line each.
+    words it pins, one ``- …`` line each. *notes_text* is ``[memory] notes_text``:
+    ``dedup`` gives :data:`NOTES_TEXT_DEDUP` in its place; anything else, the
+    default ``full``, :data:`NOTES_TEXT`, so the paragraph is as it always was.
     """
     name = _clean(model or "")
     server = _clean(server)
@@ -222,20 +254,36 @@ def identity_text(
         named = "the model you run on"
     memory = MEMORY_TEXT.format(remembers=_ACROSS.format(kept=kept) if kept else _ALONE)
     if notes is not None:
-        memory = NOTES_TEXT + (f"\n{PINNED_TEXT}{notes}" if notes else "")
+        guide = NOTES_TEXT_DEDUP if notes_text == "dedup" else NOTES_TEXT
+        memory = guide + (f"\n{PINNED_TEXT}{notes}" if notes else "")
     return IDENTITY_TEXT.format(running=running, named=named, memory=memory)
 
 
 def url_identity(
-    url: str, model: str | None, kept: str = "", notes: str | None = None
+    url: str,
+    model: str | None,
+    kept: str = "",
+    notes: str | None = None,
+    notes_text: str = "full",
 ) -> str:
     """The identity of a chat on the OpenAI-compatible server at *url*."""
     return identity_text(
-        model, discovery.server_name(url), local=True, url=url, kept=kept, notes=notes
+        model,
+        discovery.server_name(url),
+        local=True,
+        url=url,
+        kept=kept,
+        notes=notes,
+        notes_text=notes_text,
     )
 
 
-def config_identity(cfg: Config, kept: str = "", notes: str | None = None) -> str:
+def config_identity(
+    cfg: Config,
+    kept: str = "",
+    notes: str | None = None,
+    notes_text: str = "full",
+) -> str:
     """The identity of a chat on *cfg*'s chat backend and model."""
     from localmelo.support.backends.registry import get_backend
 
@@ -253,4 +301,5 @@ def config_identity(cfg: Config, kept: str = "", notes: str | None = None) -> st
         url=url,
         kept=kept,
         notes=notes,
+        notes_text=notes_text,
     )

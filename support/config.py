@@ -121,6 +121,9 @@ MEMORY_NOTE_MIN_COSINE = (0.20, 0.95)
 # the user's words of the chat's last turns, or its own words: see
 # MemoryConfig.followup_query.
 MEMORY_FOLLOWUP_QUERY = ("recent", "message")
+# Which memory guide a chat's instructions carry: the whole one, or one that leaves
+# how to write a note to the note tool: see MemoryConfig.notes_text.
+MEMORY_NOTES_TEXT = ("full", "dedup")
 # Whether a task reads its project's own instruction file: see MemoryConfig.
 MEMORY_PROJECT_INSTRUCTIONS = ("on", "off")
 RECALL_KEYS = (
@@ -145,6 +148,7 @@ RECALL_KEYS = (
     "note_gate",
     "note_min_cosine",
     "followup_query",
+    "notes_text",
 )
 RECALL_TRIGGERS = ("start", "attempt", "step", "tool")
 RECALL_KINDS = ("note", "draft", "thought", "digest", "reflection", "long")
@@ -485,7 +489,12 @@ class MemoryConfig:
     with: ``recent`` (the default) the message and the user's words of the chat's
     last two turns that the model still shows, or ``message`` the message's own
     words, as recall did before; with ``recent`` the first message of a new chat
-    that has no content recalls nothing. ``project_instructions = "off"`` stops a
+    that has no content recalls nothing. ``notes_text`` (#428) is which memory guide a
+    chat's instructions carry: ``full`` (the default) or ``dedup``, a shorter guide that
+    leaves how to write a note (second person, the user's language, the example) to
+    the ``remember`` tool's own description and keeps the rest; it reaches a chat when
+    the chat is opened, and the pinned notes under it are the same.
+    ``project_instructions = "off"`` stops a
     task that the person made from reading the instruction file of its folder (``AGENTS.md``,
     ``CLAUDE.md`` or ``GEMINI.md``, the nearest first) when it starts.
     """
@@ -519,6 +528,7 @@ class MemoryConfig:
     note_gate: str = "typed"  # typed | pointed | meaning | model: note sources.
     note_min_cosine: float = 0.55  # Least similarity of a note to its source.
     followup_query: str = "recent"  # recent | message: what "continue" searches with.
+    notes_text: str = "full"  # full | dedup: the memory guide of a chat's instructions.
     project_instructions: str = "on"  # on | off: a task reads its folder's AGENTS.md.
 
 
@@ -884,6 +894,7 @@ class Config:
             ("excerpt_open", MEMORY_EXCERPT_OPEN),
             ("note_gate", MEMORY_NOTE_GATE),
             ("followup_query", MEMORY_FOLLOWUP_QUERY),
+            ("notes_text", MEMORY_NOTES_TEXT),
             ("recall_source", MEMORY_RECALL_SOURCE),
             ("open_sources", MEMORY_OPEN_SOURCES),
             ("project_instructions", MEMORY_PROJECT_INSTRUCTIONS),

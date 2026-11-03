@@ -4,8 +4,8 @@
 ``search_when_empty``, ``recall_min_cosine``, ``recall_min_coverage``,
 ``recall_item_chars``, ``recall_excerpt``, ``recall_form``, ``recall_list_max``,
 ``recall_open_chars``, ``excerpt_open``, ``recall_source``, ``open_sources``,
-``compress_at_chars``, ``compress_parallel``, ``compress_cache``, ``note_gate``, ``note_min_cosine`` and
-``followup_query`` are saved only when they differ from the default, checked
+``compress_at_chars``, ``compress_parallel``, ``compress_cache``, ``note_gate``, ``note_min_cosine``,
+``followup_query`` and ``notes_text`` are saved only when they differ from the default, checked
 against their bounds and values, set for one run with ``-X``, and listed by the
 developer help only, each with the issue that decides it.
 """
@@ -43,6 +43,7 @@ CHANGED = {
     "note_gate": "model",
     "note_min_cosine": 0.65,
     "followup_query": "message",
+    "notes_text": "dedup",  # "full" is the default
 }
 # The issue that decides each setting, as the developer help names it.
 ISSUE = {name: "#349" for name in CHANGED} | {
@@ -58,6 +59,7 @@ ISSUE = {name: "#349" for name in CHANGED} | {
     "note_gate": "#442",
     "note_min_cosine": "#442",
     "followup_query": "#452",
+    "notes_text": "#428",
 }
 
 
@@ -86,10 +88,12 @@ def test_they_are_saved_only_when_changed_and_read_back(tmp_path: Path) -> None:
             recall_min_cosine=0.55,
             followup_query="recent",
             excerpt_open="on",
+            notes_text="full",
         )
         save(cfg)
         assert "[memory]" not in path.read_text()
         assert "excerpt_open" not in path.read_text()
+        assert "notes_text" not in path.read_text()
         cfg.memory = MemoryConfig(**CHANGED)  # type: ignore[arg-type]
         save(cfg)
         text = path.read_text()
@@ -102,7 +106,7 @@ def test_they_are_saved_only_when_changed_and_read_back(tmp_path: Path) -> None:
             'excerpt_open = "off"\nrecall_source = "items"\nopen_sources = "on"\n'
             'compress_at_chars = 20000\ncompress_parallel = 4\ncompress_cache = "cache/compress.jsonl"\n'
             'note_gate = "model"\nnote_min_cosine = 0.65\n'
-            'followup_query = "message"\n'
+            'followup_query = "message"\nnotes_text = "dedup"\n'
         ) in text
         assert config.load().memory == MemoryConfig(**CHANGED)  # type: ignore[arg-type]
         for name, value in CHANGED.items():  # each alone
@@ -179,6 +183,35 @@ def test_a_saved_value_is_kept_and_a_missing_one_is_the_larger_default(
         )
 
 
+def test_notes_text_is_full_by_default_and_saved_only_when_dedup(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "config.toml"
+    cfg = Config(chat_backend="vllm", embedding_backend="none")
+    assert MemoryConfig().notes_text == "full" and cfg.memory.notes_text == "full"
+    with (
+        mock.patch.object(config, "CONFIG_PATH", str(path)),
+        mock.patch.object(config, "CONFIG_DIR", str(tmp_path)),
+    ):
+        save(cfg)
+        assert "notes_text" not in path.read_text()
+        assert config.load().memory.notes_text == "full"
+        cfg.memory = MemoryConfig(notes_text="dedup")
+        save(cfg)
+        assert '[memory]\nnotes_text = "dedup"\n' in path.read_text()
+        assert config.load().memory.notes_text == "dedup"
+        # A file that says "full" is the default, and saves without the key.
+        path.write_text('chat_backend = "vllm"\n[memory]\nnotes_text = "full"\n')
+        loaded = config.load()
+        assert loaded.memory.notes_text == "full"
+        save(loaded)
+        assert "notes_text" not in path.read_text()
+        # Only the one key is written for it, next to another changed key.
+        cfg.memory = MemoryConfig(notes_text="dedup", recall_records=5)
+        save(cfg)
+        assert 'recall_records = 5\nnotes_text = "dedup"\n' in path.read_text()
+
+
 def test_a_file_without_followup_query_gets_the_new_default(tmp_path: Path) -> None:
     path = tmp_path / "config.toml"
     with (
@@ -245,6 +278,8 @@ def test_a_file_without_followup_query_gets_the_new_default(tmp_path: Path) -> N
         ("note_min_cosine", 0.55),
         ("followup_query", "recent"),
         ("followup_query", "message"),
+        ("notes_text", "full"),
+        ("notes_text", "dedup"),
     ],
 )
 def test_the_bounds_and_values_are_accepted(name: str, value: object) -> None:
@@ -505,6 +540,18 @@ def test_the_bounds_and_values_are_accepted(name: str, value: object) -> None:
             "Must be one of ('recent', 'message').",
         ),
         (
+            "notes_text",
+            "short",
+            "[memory] notes_text 'short' is not recognised. "
+            "Must be one of ('full', 'dedup').",
+        ),
+        (
+            "notes_text",
+            True,
+            "[memory] notes_text True is not recognised. "
+            "Must be one of ('full', 'dedup').",
+        ),
+        (
             "recall_min_cosine",
             True,
             "[memory] recall_min_cosine must be a number, got True",
@@ -590,6 +637,8 @@ def test_x_sets_each_for_one_run_and_only_the_developer_help_lists_them(
         "memory.note_min_cosine=high",
         "memory.followup_query=history",
         "memory.followup_query=on",
+        "memory.notes_text=short",
+        "memory.notes_text=on",
     ],
 )
 def test_x_refuses_a_bad_value_with_a_clear_message(

@@ -2063,7 +2063,7 @@ panel uses these routes.
 ```
 
 - `GET /api/memory/records` lists the notes newest first; `?session_id=ID` keeps one chat's.
-  `topic` is `about`, `preferences`, `people`, `projects` or `decisions`. `from` names the
+  `topic` is `about`, `preferences`, `people`, `projects`, `decisions` or `views`. `from` names the
   chat and the day, or `from a deleted chat, Oct 30` (`chat_gone` true) once the chat is
   gone; a note kept from a page or file the user pointed to (developer setting
   `[memory] note_gate`) has `from jane.example.com, Oct 30` (or `from the file resume.pdf, Oct 30`)

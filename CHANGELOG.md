@@ -786,6 +786,7 @@ localmelo has no release yet. The v0.1.0 milestone is due 2026-12-20.
 
 ### Changed
 
+- Your views on contested questions are now kept as their own kind of note, recalled when they matter but no longer part of every chat, so they don't steer melo's answers. Part of #428.
 - In Auto, the goal decides: the steps a task plainly needs run without asking, and the risky
   ones still ask. On the site or app the chat is about, opening and reading it, signing in the
   way you described, picking options, filling in and sending the task's own form and reading

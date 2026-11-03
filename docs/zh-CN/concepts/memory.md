@@ -50,7 +50,8 @@
 | 你要求时 | 请 melo 记住一个事实的消息会立刻被记下，不管模型做什么。 | "remember that Sam has the lab keys"、"keep in mind that my group meeting is on Thursdays"、"记住：我的车停在B2层"、"别忘了…"、"帮我记一下…" |
 | melo 判断值得记时 | 你告诉 melo 关于你自己或你的工作的长期信息，或对话里一个已完成任务的结果值得保留时，模型用它的 `remember` 工具记一条笔记。模型被告知：你对自己说出的明确、长期的事实（住在哪里、你的名字、某个人、你的日程、一个偏好），要在这一轮就记下。 | "I prefer short answers"、"call me Ray"、"I live in Utrecht"、"my advisor is Dr. Okafor"、"我的导师是周教授"、"we decided to use Qwen3-Embedding-0.6B" |
 
-- 一条笔记是一句对你说的话，带上主题（About you、Preferences、People、Projects 或 Decisions）、你的原话和它来自的对话。
+- 一条笔记是一句对你说的话，带上主题（About you、Preferences、People、Projects、Decisions 或 Views）、你的原话和它来自的对话。
+- 你对有争议的问题的观点会记为 Views。melo 在相关时会想起它们，但不会把它们放进每一次对话，所以它们不会左右 melo 的回答。在这个主题出现之前记下的笔记保持原来的主题。
 - 你的消息下方会显示一行 `Remembered: you prefer short answers · Undo`；Undo 会忘掉这条笔记，并恢复被它替换的那一条。
 - **新的值会替换旧的值：**
   - 一条笔记会替换同一主题的旧笔记，不论主题分类：`I live in Lisbon` 之后的 `I live in Utrecht`、`call me R.` 之后的 `call me Ray`、`…是阿凯` 之后的 `我的健身教练是小宇`。
@@ -244,8 +245,8 @@ A line that starts with an id such as [t123] is cut; open it with open_memory wh
 - 你请它记住的事实已经保存；它绝不把笔记存进文件或用代码保存；它用一句简短的话确认一条笔记。
 - 笔记用你这条消息的语言来写；记忆带回来的内容，不管有没有存成笔记，都可以用来回答你的问题：这个对话或别的对话里更早的消息，和笔记一样算数。
 - 笔记或早先的对话互相矛盾时，以最新的为准。
-- 你的 About you 和 Preferences 笔记，用你的原话列出（最多 600 个字符，在对话启动模型时读取；被替换的笔记不列出）。
-- 两个记忆工具：只读的 `search_memory`（`query`；`scope` 为 `all`、`records` 或 `chats`；`k` 最多 8）和 `remember`（`text`，一句话；`topic`：`about`、`preferences`、`people`、`projects` 或 `decisions`），后者不需要批准。设置 `recall_form = "list"` 时还有第三个，只读的 `open_memory`（`ids`：一到五个列表编号，如 `t123`），`search_memory` 的 `k` 也可以达到 `recall_list_max`。默认情况下（`excerpt_open = "on"`）有同样的第三个工具，用于被截断的节选开头的编号。设置 `recall_source = "items"` 时，编号是记忆条目的（`m12`）。
+- 你的 About you 和 Preferences 笔记，用你的原话列出（最多 600 个字符，在对话启动模型时读取；被替换的笔记不列出）。Views 不在其中：它们在匹配时才会被想起。
+- 两个记忆工具：只读的 `search_memory`（`query`；`scope` 为 `all`、`records` 或 `chats`；`k` 最多 8）和 `remember`（`text`，一句话；`topic`：`about`、`preferences`、`people`、`projects`、`decisions` 或 `views`），后者不需要批准。设置 `recall_form = "list"` 时还有第三个，只读的 `open_memory`（`ids`：一到五个列表编号，如 `t123`），`search_memory` 的 `k` 也可以达到 `recall_list_max`。默认情况下（`excerpt_open = "on"`）有同样的第三个工具，用于被截断的节选开头的编号。设置 `recall_source = "items"` 时，编号是记忆条目的（`m12`）。
 - 模型每记一条笔记，这一轮的 `turn.memory` 事件就会带着它完整地再发送一次。回答说它记下了或保存了某件事而没有记下任何笔记时（包括回答没有说明内容，如 "Saved."），该事件里的 `unsaved_claim` 为 `true`。
 
 直接运行（`melo "<task>"`）、终端对话、worker 和基准测试既不召回也不记笔记，也没有 `remember` 工具；任务的运行器只把结果加入索引。
@@ -299,7 +300,7 @@ A line that starts with an id such as [t123] is cut; open it with open_memory wh
 
 - 它是关于你和项目的信息，不是指令，第一行就这样说明。每一行的写法和召回块一致：`the user said “…”` 或 `a note to the user “…”`。
 - 内容按顺序是：你的 About you 和 Preferences 笔记（新的在前，从别的工具导入的也算）；任务所在项目文件夹的笔记；然后是和任务目标匹配的笔记，范围同上两类主题和项目。别的文件夹的项目笔记不会出现。
-- 绝不包含 People 和 Decisions 笔记。worker 会浏览网页、调用外部工具，所以只给它必需的最少内容。
+- 绝不包含 People、Decisions 和 Views 笔记。worker 会浏览网页、调用外部工具，所以只给它必需的最少内容。
 - 最多 1,500 个字符，超出时先去掉排名最低的行，不会把一行截成两半。记忆关闭或没有合适内容时为空。构建它不调用聊天模型；设置了嵌入模型时，任务目标也按语义匹配，沿用上面的 1.5 秒限制。
 
 <a id="a-task-reads-its-projects-own-instruction-file"></a>

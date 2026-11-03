@@ -44,7 +44,8 @@ In the web console and the app, melo remembers across chats.
 | You ask | A message that asks melo to remember a fact is kept at once, whatever the model does. | "remember that Sam has the lab keys", "keep in mind that my group meeting is on Thursdays", "记住：我的车停在B2层", "别忘了…", "帮我记一下…" |
 | melo judges it worth keeping | You tell melo something lasting about yourself or your work, or a finished task's result in the chat is worth keeping: the model keeps a note with its `remember` tool. It is told to keep a plain, lasting fact about you (where you live, your name, a person, your schedule, a preference) in that turn. | "I prefer short answers", "call me Ray", "I live in Utrecht", "my advisor is Dr. Okafor", "我的导师是周教授", "we decided to use Qwen3-Embedding-0.6B" |
 
-- A note is one sentence addressed to you, with its topic (About you, Preferences, People, Projects or Decisions), your words and the chat it came from.
+- A note is one sentence addressed to you, with its topic (About you, Preferences, People, Projects, Decisions or Views), your words and the chat it came from.
+- Your views on contested questions are kept as Views. melo recalls them when they matter, but never puts them in every chat, so they don't steer its answers. Notes kept before this topic existed keep the topic they have.
 - A line under your message says `Remembered: you prefer short answers · Undo`; Undo forgets the note and brings back the one it replaced.
 - **A newer value replaces an older one:**
   - A note replaces an older note of the same subject, in any topic: `I live in Utrecht` after `I live in Lisbon`, `call me Ray` after `call me R.`, `我的健身教练是小宇` after `…是阿凯`.
@@ -238,8 +239,8 @@ What a chat is told about memory:
 - That a note is written in the language of your message, and that what memory brings back answers your question whether or not it was kept as a note: an earlier message of this chat or another counts as much as a note.
 - That it sees only the recent messages of the conversation: older parts of it, earlier chats and notes come back with your message when they match, and `search_memory` looks up more.
 - That when notes or earlier chats disagree, the newest one is true.
-- Your About-you and Preferences notes, in your own words (at most 600 characters, read when the chat starts its model; a replaced note is not listed).
-- Two memory tools: the read-only `search_memory` (`query`, `scope` of `all`, `records` or `chats`, `k` up to 8) and `remember` (`text`, one sentence; `topic`: `about`, `preferences`, `people`, `projects` or `decisions`), which asks no approval. With `recall_form = "list"` there is a third, the read-only `open_memory` (`ids`: one to five list ids such as `t123`), and `search_memory`'s `k` may reach `recall_list_max`. By default (`excerpt_open = "on"`) there is the same third tool, for the ids that cut excerpts start with. With `recall_source = "items"` the ids are memory items' (`m12`).
+- Your About-you and Preferences notes, in your own words (at most 600 characters, read when the chat starts its model; a replaced note is not listed). Views are not among them: they are recalled when they match.
+- Two memory tools: the read-only `search_memory` (`query`, `scope` of `all`, `records` or `chats`, `k` up to 8) and `remember` (`text`, one sentence; `topic`: `about`, `preferences`, `people`, `projects`, `decisions` or `views`), which asks no approval. With `recall_form = "list"` there is a third, the read-only `open_memory` (`ids`: one to five list ids such as `t123`), and `search_memory`'s `k` may reach `recall_list_max`. By default (`excerpt_open = "on"`) there is the same third tool, for the ids that cut excerpts start with. With `recall_source = "items"` the ids are memory items' (`m12`).
 - Each note the model keeps adds it to the turn's `turn.memory` event, sent again whole. `unsaved_claim` in that event is `true` when the reply said it noted or saved something and no note was kept, also when the reply named nothing ("Saved.").
 
 Direct runs (`melo "<task>"`), the terminal chat, workers and the benchmark neither recall nor keep notes, and have no `remember` tool; a task's runner only adds its result to the index.
@@ -287,7 +288,7 @@ The context pack:
 
 - It is information about you and the project, not instructions, and it says so in its first line. Each line reads as in the recall block: `the user said “…”` or `a note to the user “…”`.
 - In it, in this order: your About you and Preferences notes, newest first (notes imported from another tool too); the notes of the task's project folder; then the notes that match the task's objective, among the same topics and projects. A project note of another folder is left out.
-- Never in it: People and Decisions notes. A worker browses and calls outside tools, so it gets the least that it needs.
+- Never in it: People, Decisions and Views notes. A worker browses and calls outside tools, so it gets the least that it needs.
 - At most 1,500 characters. The lowest-ranked lines go first, and a line is never cut in half. It is empty when memory is off or nothing qualifies. Building it asks no chat model; with an embedding model set up, the objective is matched by meaning too, with the 1.5 s limit above.
 
 ### A task reads its project's own instruction file

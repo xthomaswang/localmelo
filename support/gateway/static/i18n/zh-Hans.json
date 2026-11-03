@@ -1083,6 +1083,7 @@
   "memoryTab.topic.people": "人物",
   "memoryTab.topic.preferences": "偏好",
   "memoryTab.topic.projects": "项目",
+  "memoryTab.topic.views": "观点",
   "model.server.openaiCompatible": "兼容 OpenAI 的服务器",
   "outbox.cancel": "取消并保留草稿",
   "outbox.checking": "正在检查…",

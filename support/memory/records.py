@@ -61,13 +61,14 @@ from localmelo.melo.schema import new_record_id
 from localmelo.support.memory import people
 from localmelo.support.memory.recall import OLDER, Item, stem, unit
 
-TOPICS: Final = ("about", "preferences", "people", "projects", "decisions")
+TOPICS: Final = ("about", "preferences", "people", "projects", "decisions", "views")
 TOPIC_LABELS: Final = {
     "about": "About you",
     "preferences": "Preferences",
     "people": "People",
     "projects": "Projects",
     "decisions": "Decisions",
+    "views": "Views",
 }
 # The long-term kind each topic is stored as.
 TOPIC_KINDS: Final = {
@@ -76,6 +77,7 @@ TOPIC_KINDS: Final = {
     "people": "semantic",
     "projects": "episodic",
     "decisions": "semantic",
+    "views": "semantic",
 }
 MAX_RECORD_CHARS: Final = 300
 # A message longer than this is a task or a paste, not a statement to keep.
@@ -97,6 +99,27 @@ EMPTY: Final = (
 _DECISION = re.compile(
     r"\b(we(?:'ve| have)? decided|let's go with|we(?:'ll| will) go with)\b"
     r"|我们决定|决定用|就用",
+    re.IGNORECASE,
+)
+# A stance on a question people disagree about, in the user's words. Only
+# wordings that state one: a bare "I think" / "我觉得" is as often a plan or a guess
+# ("I think I'll be late").
+_VIEW = re.compile(
+    r"\bI believe(?: that)?\b"
+    r"|\bin my (?:opinion|view)\b"
+    r"|\bmy view is\b"
+    r"|\bI(?:'|’)m (?:strongly )?(?:for|against)\b"
+    r"|\bI (?:support|oppose)\b"
+    r"|我认为|我相信|在我看来|我支持|我反对",
+    re.IGNORECASE,
+)
+# The same stance as a note says it back, at its start ("You believe …": the
+# model's note of an unnamed topic, a claimed save).
+_VIEW_NOTE = re.compile(
+    r"^\s*(?:you (?:believe(?: that)?|support|oppose)"
+    r"|you(?:'|’)re (?:strongly )?(?:for|against)"
+    r"|your view is|in your (?:opinion|view))\b"
+    r"|^\s*(?:你(?:认为|相信|支持|反对)|在你看来)",
     re.IGNORECASE,
 )
 _PREFERENCE = re.compile(
@@ -454,10 +477,14 @@ def topic_of(sentence: str, *, request: bool) -> str:
     A request is filed under ``people`` only when its fact is about a person
     (:func:`_about_a_person`): "Marco's studio is on Main St", "Marco lives in
     Berlin". A rule or a fact about the work ("tests run with -n auto",
-    "开发的代码一律用英文") is ``about``.
+    "开发的代码一律用英文") is ``about``. A stated stance ("I believe …", "在我看来…",
+    :data:`_VIEW`; a note's "You believe …" too) is ``views``, checked before a
+    preference.
     """
     if _DECISION.search(sentence):
         return "decisions"
+    if _VIEW.search(sentence) or _VIEW_NOTE.search(sentence):
+        return "views"
     if _PREFERENCE.search(sentence):
         return "preferences"
     if _FIRST_PERSON.search(sentence):

@@ -67,8 +67,8 @@ PICKED_CHARS: Final = 900
 # An opened turn or item is never cut below a recall line's room.
 OPENED_FLOOR: Final = 240
 # The notes a task never gets, as the pack leaves them out: a task browses and
-# calls outside tools.
-LEFT_OUT_TOPICS: Final = frozenset({"people", "decisions"})
+# calls outside tools, and the person's views are for the chat to recall.
+LEFT_OUT_TOPICS: Final = frozenset({"people", "decisions", "views"})
 # How a turn of the chat itself is named once a task reads it.
 _THIS_CHAT: Final = "this chat"
 _STARTING_CHAT: Final = "the chat that started this task"
@@ -322,7 +322,7 @@ async def picked_lines(
     what recall showed, then the digest of the other chats); each turn, note or
     item once. A turn of *shown* (the block of newest turns has it, cut short)
     is left out, unless the model opened it: the opened line keeps it whole and
-    the block leaves it out (``over``). Never a People or Decisions note, nor one
+    the block leaves it out (``over``). Never a People, Decisions or Views note, nor one
     deleted since. No line carries an id: a task cannot open one. A recalled
     line keeps the excerpt the chat read. When the lines pass *chars*, the
     opened text is cut at a sentence end first (lowest first, never below
@@ -352,7 +352,7 @@ async def picked_lines(
         if item.is_record:
             topic = topics.get(item.key)
             if topic is None or topic in LEFT_OUT_TOPICS:
-                continue  # a note deleted since, or one of People or Decisions
+                continue  # a note deleted since, or one of People, Decisions or Views
         add(_recalled(item, room))
     for digest in handover.digest:
         line = _flat(digest.line)
@@ -402,8 +402,8 @@ def from_snapshot(
 
 async def kept_lines(memory: ChatMemory, handover: Handover) -> Picked:
     """What the offering turn picked (``handover.kept``), as :func:`picked_lines`
-    gives it, checked again now: a note deleted since, or one of People or
-    Decisions, is left out. The lines were cut to their room when kept."""
+    gives it, checked again now: a note deleted since, or one of People,
+    Decisions or Views, is left out. The lines were cut to their room when kept."""
     keys = {note for _, note in handover.kept if note}
     topics = await _topics(memory) if keys else {}
     entries = tuple(

@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {askAboutNotes, forgetLine, matches, searchLine, setupMemoryTab} from '../../support/gateway/static/memory-tab.mjs';
+import {TOPICS, askAboutNotes, forgetLine, matches, searchLine, setupMemoryTab, topicName} from '../../support/gateway/static/memory-tab.mjs';
 
 class Element {
   constructor(tag) {
@@ -66,6 +66,18 @@ test('the words: what a search matches, how memory searches, and what forgetting
   assert.match(searchLine(true, 'Qwen3-Embedding-0.6B', 'embedding'), /by meaning with Qwen3-Embedding-0.6B/);
   assert.equal(forgetLine(2, 5), "This removes 2 notes and melo's search index of 5 chat turns. Your chats stay. It cannot be undone.");
   assert.equal(forgetLine(1, 0), 'This removes 1 note. Your chats stay. It cannot be undone.');
+});
+
+test('Views is a topic the tab names, lists and searches by', async () => {
+  assert.ok(TOPICS.includes('views'));
+  assert.equal(topicName('views'), 'Views');
+  assert.equal(topicName('opinions'), '');
+  const row = note(3, 'You believe remote work beats the office.', {topic: 'views'});
+  assert.ok(matches(row, 'views remote'));
+  const h = harness({records: [row]});
+  await h.tab.show();
+  assert.deepEqual(h.tab.root.findAll((node) => node.className === 'memory-note').map((item) => item.text()),
+    ['You believe remote work beats the office. Views From chat “Planning”, Oct 30 Edit Delete']);
 });
 
 test('the notes are listed as the server sent them, each with its source, and a gone chat says so', async () => {

@@ -261,7 +261,7 @@ melo 回答时，消息框仍然可用。它的提示是 `Add to what melo is do
 **Memory** 列出 melo 记得的关于你的内容：它根据你输入的话保存的笔记（见[跨对话记忆](../concepts/memory.md#memory-across-chats)）。
 
 - 开关 **Remember across chats** 打开或关闭跨对话记忆，下面一行说明 melo 怎样搜索：`Searching by meaning with Qwen3-Embedding-0.6B, and by words.` 或 `Searching by words only.`。设置里点 **Discover models** 在你的服务器上找到嵌入模型后，会问 `Remember across chats with <model>?`。
-- 笔记按时间从新到旧排列，每条带主题（About you、Preferences、People、Projects、Decisions）和来源：`From chat “Planning”, Oct 30`，对话被删除后是 `From a deleted chat, Oct 30`，因为笔记比对话活得久。搜索框可以筛选。
+- 笔记按时间从新到旧排列，每条带主题（About you、Preferences、People、Projects、Decisions、Views）和来源：`From chat “Planning”, Oct 30`，对话被删除后是 `From a deleted chat, Oct 30`，因为笔记比对话活得久。搜索框可以筛选。
 - **Edit** 打开笔记供改写；**Save** 保存新文字（看起来像密码或密钥的文字会被拒绝并说明原因）。**Delete** 会问 `Forget this note?`，选项是 **Keep it** 和 **Forget it**。
 - **Forget everything…** 在删除之前说明将删除什么：`This removes 12 notes and melo's search index of 48 chat turns. Your chats stay. It cannot be undone.` **Keep everything** 排在第一位。开发者模式下，**Rebuild search index** 会重新读取对话。
 - 没有任何记忆时，标签页说明记忆怎样开始：在对话里告诉 melo 一件关于你自己的事（如 `I prefer short answers`），或让它记住某件事。

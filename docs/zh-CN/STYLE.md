@@ -56,7 +56,7 @@
 | panel, tab, sidebar | 面板，标签页，侧边栏 |
 | Details | 详情 |
 | Memory (tab), note | 记忆，笔记 |
-| About you, Preferences, People, Projects, Decisions | 关于你，偏好，人物，项目，决定 |
+| About you, Preferences, People, Projects, Decisions, Views | 关于你，偏好，人物，项目，决定，观点 |
 | Remember across chats, Forget, Undo | 跨对话记忆，忘记，撤销 |
 | approval, Waiting for your approval | 审批，在等你批准 |
 | allowed, denied, session grant | 已允许，已拒绝，会话授权 |

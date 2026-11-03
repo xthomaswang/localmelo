@@ -1130,6 +1130,7 @@
   "memoryTab.topic.people": "People",
   "memoryTab.topic.preferences": "Preferences",
   "memoryTab.topic.projects": "Projects",
+  "memoryTab.topic.views": "Views",
   "model.server.openaiCompatible": "OpenAI-compatible server",
   "outbox.cancel": "Cancel and keep draft",
   "outbox.checking": "Checking…",

@@ -416,7 +416,7 @@ its handle closes it (Esc first leaves a task shown in it). The [macOS app](maco
 - The switch **Remember across chats** turns memory on or off, and a line under it says how melo searches: `Searching
   by meaning with Qwen3-Embedding-0.6B, and by words.` or `Searching by words only.` Settings asks `Remember across chats
   with <model>?` once **Discover models** finds an embedding model on your server.
-- The notes come newest first, each with its topic (About you, Preferences, People, Projects, Decisions) and where it
+- The notes come newest first, each with its topic (About you, Preferences, People, Projects, Decisions, Views) and where it
   came from: `From chat “Planning”, Oct 30`, or `From a deleted chat, Oct 30`, since a note outlives its chat. The search
   box filters them.
 - **Edit** opens the note to reword; **Save** keeps the new wording (a wording that looks like a password or key is

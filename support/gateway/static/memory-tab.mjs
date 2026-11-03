@@ -12,7 +12,7 @@
 import {t} from './i18n.mjs';
 import {importSection} from './import-card.mjs';
 
-export const TOPICS = ['about', 'preferences', 'people', 'projects', 'decisions'];
+export const TOPICS = ['about', 'preferences', 'people', 'projects', 'decisions', 'views'];
 
 /** A topic's name in the page's language, or '' for a topic the page does not know. */
 export function topicName(topic) {

@@ -146,6 +146,7 @@ def test_the_defaults_are_the_shipped_numbers() -> None:
         0.40,  # gather_floor: used only with gather on
         "fixed",  # floor: one vector bar for every question
         2.5,  # floor_z: used only with a relative floor
+        0,  # weak: no match under the bar is listed
     )
     assert cfg.followup_query == "recent"
     assert (cfg.recall_min_cosine, cfg.recall_min_coverage) == (0.55, 0.6)

@@ -164,6 +164,7 @@ Older chat turns that may hold the answer, closest first. Open the ones you need
 - `open_memory` 接收这些行里的一到五个编号，把每一轮完整返回：你说的话和 melo 的回复，附上日期和对话，最多 `recall_open_chars` 个字符（更长的一轮在句末截断，并以 `… (cut)` 结尾）。编号不存在、属于你已删除的对话，或不是对话轮次的编号（例如笔记的编号），都不会打开任何内容，并会说明这一点。这一轮的 `turn.memory` 事件用 `opened` 列出打开过的轮次。
 - 开发者设置 `[memory] gather`（默认 `"off"`，什么都不改变；`"wide"` 或 `"guide"`，`-X memory.gather=wide` 只对一次运行生效）针对要求计数、合计、列举或比较、并且说到了你自己的消息（"how many"、"in total"、"each"、"compared"、"一共"、"哪些" 等；"I"、"my"、"we"、"我" 等）；像 "how many seconds are in a day" 这样的通用问题不受影响。对这样的消息，列表的语义门槛从 `recall_min_cosine` 降到 `gather_min_cosine`（默认 0.40），所以回答需要的每个对话里的条目都会列出来；列表形式的每次 `search_memory` 也用这个较低的门槛。`"guide"` 还会在列表下面加一句话，告诉模型打开每个可能相关的列出条目，对还没有列出的每一类换别的词再搜一次，并且只数条目里说的。节选形式不变。
 - 开发者设置 `[memory] recall_floor`（默认 `"fixed"`，什么都不改变；`"relative"`，`-X memory.recall_floor=relative` 只对一次运行生效）按问题自己的匹配有多突出来决定匹配要多接近，而不是用同一个数。最佳匹配低于 `recall_min_cosine` 时，不按语义列出任何内容；否则门槛是 0.40 与「平均相似度加上 `recall_floor_z`（默认 2.5）个标准差」中较大的一个，但不会高于最佳匹配；带向量的条目少于 20 个时仍用通常的门槛。问单个事实的问题保留最好的几条，答案离得更远的问题会列出更多条，普通的消息则保持安静。它作用于召回块（节选形式也一样）和列表形式的 `search_memory`；被 `gather` 放宽的消息保留 `gather` 的门槛。
+- 开发者设置 `[memory] weak_matches`（默认 `0`，什么都不改变；1 到 5，`-X memory.weak_matches=3` 只对一次运行生效）会在召回块里，在列表之后、在一行说明之下（说明这些是较弱的匹配、可能与这条消息无关），列出刚好低于门槛（相似度不低于 0.40）的最佳几条匹配。只有消息需要时 melo 才会打开其中一条，其余的不会提起。低于 0.40 的不会列出，列表里已有的不会列两次，`recall_chars` 用完时它们最先被省掉。它只作用于列表形式的召回块；`search_memory` 不变。
 
 **可以打开的被截断节选。** 默认情况下（`[memory] excerpt_open = "on"`），召回仍然给出节选，但显示内容少于整轮的一行会以这一轮的编号开头，模型可以把这一轮完整打开：
 

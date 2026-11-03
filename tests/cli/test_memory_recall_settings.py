@@ -5,7 +5,7 @@
 ``recall_item_chars``, ``recall_excerpt``, ``recall_form``, ``recall_list_max``,
 ``recall_open_chars``, ``excerpt_open``, ``recall_source``, ``open_sources``,
 ``compress_at_chars``, ``compress_parallel``, ``compress_cache``, ``note_gate``, ``note_min_cosine``,
-``followup_query``, ``gather``, ``gather_min_cosine``, ``recall_floor`` and ``recall_floor_z`` are saved only when they differ from the default, checked
+``followup_query``, ``gather``, ``gather_min_cosine``, ``recall_floor``, ``recall_floor_z`` and ``weak_matches`` are saved only when they differ from the default, checked
 against their bounds and values, set for one run with ``-X``, and listed by the
 developer help only, each with the issue that decides it.
 """
@@ -47,6 +47,7 @@ CHANGED = {
     "gather_min_cosine": 0.3,
     "recall_floor": "relative",
     "recall_floor_z": 3.5,
+    "weak_matches": 3,
 }
 # The issue that decides each setting, as the developer help names it.
 ISSUE = {name: "#349" for name in CHANGED} | {
@@ -66,6 +67,7 @@ ISSUE = {name: "#349" for name in CHANGED} | {
     "gather_min_cosine": "#428",
     "recall_floor": "#428",
     "recall_floor_z": "#428",
+    "weak_matches": "#428",
 }
 
 
@@ -90,6 +92,7 @@ def test_they_are_saved_only_when_changed_and_read_back(tmp_path: Path) -> None:
         assert "followup_query" not in path.read_text()
         assert "gather" not in path.read_text()
         assert "recall_floor" not in path.read_text()
+        assert "weak_matches" not in path.read_text()
         cfg.memory = MemoryConfig(  # the defaults
             recall_records=3,
             recall_notes="on",
@@ -100,6 +103,7 @@ def test_they_are_saved_only_when_changed_and_read_back(tmp_path: Path) -> None:
             gather_min_cosine=0.40,
             recall_floor="fixed",
             recall_floor_z=2.5,
+            weak_matches=0,
         )
         save(cfg)
         assert "[memory]" not in path.read_text()
@@ -119,6 +123,7 @@ def test_they_are_saved_only_when_changed_and_read_back(tmp_path: Path) -> None:
             'followup_query = "message"\n'
             'gather = "guide"\ngather_min_cosine = 0.3\n'
             'recall_floor = "relative"\nrecall_floor_z = 3.5\n'
+            "weak_matches = 3\n"
         ) in text
         assert config.load().memory == MemoryConfig(**CHANGED)  # type: ignore[arg-type]
         for name, value in CHANGED.items():  # each alone
@@ -273,6 +278,9 @@ def test_a_file_without_followup_query_gets_the_new_default(tmp_path: Path) -> N
         ("recall_floor_z", 4.0),
         ("recall_floor_z", 2.5),
         ("recall_floor_z", 3),  # a whole number is a number
+        ("weak_matches", 0),
+        ("weak_matches", 5),
+        ("weak_matches", 3),
     ],
 )
 def test_the_bounds_and_values_are_accepted(name: str, value: object) -> None:
@@ -607,6 +615,31 @@ def test_the_bounds_and_values_are_accepted(name: str, value: object) -> None:
             "[memory] recall_floor_z must be from 1.5 to 4.0, got nan",
         ),
         (
+            "weak_matches",
+            -1,
+            "[memory] weak_matches must be from 0 to 5, got -1",
+        ),
+        (
+            "weak_matches",
+            6,
+            "[memory] weak_matches must be from 0 to 5, got 6",
+        ),
+        (
+            "weak_matches",
+            "3",
+            "[memory] weak_matches must be a whole number, got '3'",
+        ),
+        (
+            "weak_matches",
+            2.5,
+            "[memory] weak_matches must be a whole number, got 2.5",
+        ),
+        (
+            "weak_matches",
+            True,
+            "[memory] weak_matches must be a whole number, got True",
+        ),
+        (
             "recall_min_cosine",
             True,
             "[memory] recall_min_cosine must be a number, got True",
@@ -702,6 +735,11 @@ def test_x_sets_each_for_one_run_and_only_the_developer_help_lists_them(
         "memory.recall_floor_z=1.4",
         "memory.recall_floor_z=4.5",
         "memory.recall_floor_z=wide",
+        "memory.weak_matches=-1",
+        "memory.weak_matches=6",
+        "memory.weak_matches=2.5",
+        "memory.weak_matches=many",
+        "memory.weak_matches=true",
     ],
 )
 def test_x_refuses_a_bad_value_with_a_clear_message(

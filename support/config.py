@@ -115,6 +115,10 @@ MEMORY_GATHER_MIN_COSINE = (0.20, 0.55)
 # MemoryConfig.recall_floor and recall_floor_z.
 MEMORY_RECALL_FLOOR = ("fixed", "relative")
 MEMORY_RECALL_FLOOR_Z = (1.5, 4.0)
+# How many matches under the vector bar the list form shows, marked as weak, for the
+# model to open only if the message needs them (0: none): see
+# MemoryConfig.weak_matches.
+MEMORY_WEAK_MATCHES = (0, 5)
 # How far back a new chat's first turn looks into the other chats: see
 # ChatConfig.recent_digest_minutes (0 turns it off).
 CHAT_RECENT_DIGEST_MINUTES = (0, 1440)
@@ -158,6 +162,7 @@ RECALL_KEYS = (
     "gather_min_cosine",
     "recall_floor",
     "recall_floor_z",
+    "weak_matches",
 )
 RECALL_TRIGGERS = ("start", "attempt", "step", "tool")
 RECALL_KINDS = ("note", "draft", "thought", "digest", "reflection", "long")
@@ -515,6 +520,12 @@ class MemoryConfig:
     not takes no vector match; a memory with fewer than 20 items that have a vector
     keeps ``recall_min_cosine``); ``recall_floor_z`` is 1.5-4.0, 2.5 by default. A
     question that ``gather`` widens keeps the ``gather`` bar.
+    ``weak_matches`` (#428, 0-5, 0 by default: none) applies to ``recall_form = "list"``
+    and the recall block of a message: under the vector bar the question used, the
+    best that many items whose similarity is 0.40 or more and that the list does not
+    hold are listed after it, under one line that says they are weaker matches, may
+    not be about the message, and are to be opened only if the message needs them.
+    ``search_memory`` is unchanged.
     ``project_instructions = "off"`` stops a
     task that the person made from reading the instruction file of its folder (``AGENTS.md``,
     ``CLAUDE.md`` or ``GEMINI.md``, the nearest first) when it starts.
@@ -553,6 +564,7 @@ class MemoryConfig:
     gather_min_cosine: float = 0.40  # The vector bar for such a question.
     recall_floor: str = "fixed"  # fixed | relative: the vector bar of a question.
     recall_floor_z: float = 2.5  # Standard deviations above the mean, if relative.
+    weak_matches: int = 0  # Marked matches under the bar a list adds, at most.
     project_instructions: str = "on"  # on | off: a task reads its folder's AGENTS.md.
 
 
@@ -890,6 +902,7 @@ class Config:
             ("recall_open_chars", MEMORY_RECALL_OPEN_CHARS),
             ("compress_at_chars", MEMORY_COMPRESS_AT_CHARS),
             ("compress_parallel", MEMORY_COMPRESS_PARALLEL),
+            ("weak_matches", MEMORY_WEAK_MATCHES),
         ):
             value = getattr(self.memory, name)
             if not isinstance(value, int) or isinstance(value, bool):

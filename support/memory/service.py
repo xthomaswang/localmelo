@@ -87,6 +87,7 @@ from localmelo.support.config import (
     MEMORY_RECALL_MIN_COVERAGE,
     MEMORY_RECALL_OPEN_CHARS,
     MEMORY_RECALL_RECORDS,
+    MEMORY_WEAK_MATCHES,
 )
 from localmelo.support.memory import hippo_encode, note_gate, records
 from localmelo.support.memory import sleep as sleeping
@@ -125,8 +126,6 @@ from localmelo.support.memory.recall import (
     GATHER_COSINE,
     GATHER_GUIDE,
     ITEM_CHARS,
-    ITEM_LIST_GUIDE,
-    LIST_GUIDE,
     LIST_MAX,
     MIN_COSINE,
     MIN_COVERAGE,
@@ -139,7 +138,7 @@ from localmelo.support.memory.recall import (
     Item,
     Shown,
     asks_to_gather,
-    block,
+    block_with_weak,
     chat_label,
     current_only,
     cut_at_sentence,
@@ -147,9 +146,11 @@ from localmelo.support.memory.recall import (
     in_view,
     is_contentless,
     kept_lines,
+    list_guide,
     meaning_of,
     newer_first,
     pick,
+    pick_weak,
     ranked,
     replaced_turns,
     snippet,
@@ -158,6 +159,7 @@ from localmelo.support.memory.recall import (
     turn_said,
     unit,
     vector_floor,
+    weak_scores,
     whole_turn,
 )
 
@@ -252,7 +254,10 @@ class Recall:
     best match is under ``recall_min_cosine``, or a memory with too few items to
     read a spread from, reports ``recall_min_cosine``). *gather* is ``None`` with
     ``gather`` off; *floor* and *floor_rule* are ``None`` with ``gather`` off and
-    ``recall_floor`` ``fixed``. A ``None`` is left out of :meth:`to_json`.
+    ``recall_floor`` ``fixed``. With ``[memory] weak_matches`` above 0, *weak* is how
+    many weak matches (:func:`~.recall.pick_weak`) the block shows, ``0`` when the
+    form is not the list; it is ``None`` with ``weak_matches`` 0. A ``None`` is left
+    out of :meth:`to_json`.
     """
 
     retriever: str = "bm25"
@@ -270,13 +275,25 @@ class Recall:
     gather: bool | None = None
     floor: float | None = None
     floor_rule: str | None = None
+    weak: int | None = None
 
     def to_json(self) -> dict[str, Any]:
         data = asdict(self)
-        for name in ("gather", "floor", "floor_rule"):
+        for name in ("gather", "floor", "floor_rule", "weak"):
             if data[name] is None:
                 del data[name]
         return data
+
+
+@dataclass
+class WeakPick:
+    """The weak matches a search is asked for (``[memory] weak_matches``): *limit*
+    at most, and, once :meth:`ChatMemory._find` has run, the *found* ones
+    (:func:`~.recall.pick_weak`: under the vector bar the search used, not in the
+    list it returned)."""
+
+    limit: int
+    found: list[Item] = field(default_factory=list)
 
 
 def _resolve(mode: str, failure: str) -> tuple[str, str]:
@@ -311,10 +328,12 @@ class RecallSettings(NamedTuple):
     of a question that counts, totals or compares. *floor* is ``[memory]
     recall_floor`` (``fixed`` or ``relative``) and *floor_z* ``recall_floor_z``: with
     ``relative`` the vector bar of any other question comes from its own similarities
-    (:func:`~.recall.relative_floor`). The defaults are the shipped
+    (:func:`~.recall.relative_floor`). *weak* is ``[memory] weak_matches``: with the
+    list form, the most matches under that bar the block shows, marked as weak
+    (:func:`~.recall.pick_weak`). The defaults are the shipped
     ones: a block of :data:`BLOCK_CHARS` and a turn of :data:`ITEM_CHARS` (#349),
-    *followup* and *excerpt_open* on, *gather* off, *floor* ``fixed``, and what recall
-    did before these were settings for the rest.
+    *followup* and *excerpt_open* on, *gather* off, *floor* ``fixed``, *weak* 0, and
+    what recall did before these were settings for the rest.
     """
 
     records: int = AUTO_RECORDS
@@ -337,6 +356,7 @@ class RecallSettings(NamedTuple):
     gather_floor: float = GATHER_COSINE
     floor: str = "fixed"
     floor_z: float = RELATIVE_Z
+    weak: int = 0
 
     @property
     def opens_excerpts(self) -> bool:
@@ -374,7 +394,7 @@ def _guide(settings: RecallSettings, gathers: bool) -> str:
     """The line above a list of turns or items: :data:`LIST_GUIDE` (or
     :data:`ITEM_LIST_GUIDE`) and, with ``[memory] gather = "guide"`` on a turn that
     asks to count, total or compare (*gathers*), :data:`GATHER_GUIDE` after it."""
-    guide = ITEM_LIST_GUIDE if settings.items else LIST_GUIDE
+    guide = list_guide(settings.items)
     if gathers and settings.gather == "guide":
         return f"{guide} {GATHER_GUIDE}"
     return guide
@@ -962,6 +982,7 @@ class ChatMemory:
             bar("gather_min_cosine", GATHER_COSINE, MEMORY_GATHER_MIN_COSINE),
             flooring if flooring in MEMORY_RECALL_FLOOR else "fixed",
             bar("recall_floor_z", RELATIVE_Z, MEMORY_RECALL_FLOOR_Z),
+            bounded("weak_matches", 0, MEMORY_WEAK_MATCHES),
         )
 
     def note_settings(self) -> NoteSettings:
@@ -1181,6 +1202,7 @@ class ChatMemory:
         min_coverage: float = MIN_COVERAGE,
         listing: bool = False,
         relative_z: float | None = None,
+        weak: WeakPick | None = None,
     ) -> list[Item]:
         """Rank for *query* as the retriever says; the numbers go to *recall*.
 
@@ -1193,6 +1215,8 @@ class ChatMemory:
         and a query vector the vector bar is the question's own
         (:func:`~.recall.relative_floor`, *min_cosine* its gate), and ``recall.floor``
         is the bar that came out (*min_cosine* when no match reached the gate).
+        With *weak* (and a query vector) its ``found`` are the best ``limit`` items
+        under that bar and at least 0.40 close that the returned list does not hold.
         """
         mode = self.retriever()
         recall.retriever, recall.fallback = _resolve(mode, embedded.failure)
@@ -1235,6 +1259,19 @@ class ChatMemory:
                 else []
             )
             replaced = self._replaced(corpus, notes)
+            scored = (
+                weak_scores(
+                    corpus,
+                    vector,
+                    embedded.model,
+                    exclude_session=exclude_session,
+                    keep_from_turn=keep_from_turn,
+                    notes=notes,
+                    replaced=replaced,
+                )
+                if weak is not None and weak.limit > 0 and vector is not None
+                else []
+            )
         if not notes:
             found = [item for item in found if not item.is_record]
             loose = [item for item in loose if not item.is_record]
@@ -1273,6 +1310,8 @@ class ChatMemory:
                 for item in items
             ]
         recall.used = len(items)
+        if weak is not None:
+            weak.found = pick_weak(scored, floor=floor, limit=weak.limit, listed=items)
         return items
 
     async def _select(
@@ -1507,6 +1546,8 @@ class ChatMemory:
         if budget.gathers or budget.relative:
             recall.floor = budget.min_cosine
             recall.floor_rule = "relative" if budget.relative else "fixed"
+        if budget.weak:
+            recall.weak = 0
         # A message with no content of its own ("go look it up", "continue") is
         # searched with what the person said last in this chat, not with its own
         # words, which match whatever holds them. With no earlier turn to follow
@@ -1553,6 +1594,9 @@ class ChatMemory:
             recall.floor_rule = (
                 "gather" if wide else "relative" if relative else "fixed"
             )
+        # With ``weak_matches`` the list form also holds the few matches under that
+        # bar, marked as weak, which the model opens only if the message needs them.
+        weak = WeakPick(budget.weak) if budget.weak and budget.listing else None
         used = await self._find(
             query,
             embedded,
@@ -1566,18 +1610,22 @@ class ChatMemory:
             min_coverage=budget.min_coverage,
             listing=budget.listing,
             relative_z=budget.floor_z if relative else None,
+            weak=weak,
         )
         # The block gives the current value only: a turn a newer note replaced
         # stays out unless the message asks about the past. Notes of one subject
         # with different values are listed newest first, the older marked.
-        text, used = block(
+        text, used, shown = block_with_weak(
             records.newer_values_first(current_only(used, typed)),
             kept_lines([cand.quote for cand in found], refused=refused),
             budget.chars,
             budget.shown(query),
             listing=budget.listing,
             guide=_guide(budget, gathers),
+            weak=weak.found if weak is not None else (),
         )
+        if budget.weak:
+            recall.weak = len(shown)
         hinted = budget.hint and not used
         if hinted:
             text = f"{text or BLOCK_HEADER}\n{SEARCH_HINT}"

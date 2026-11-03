@@ -32,6 +32,11 @@ chats (key ``m:<id>``, :mod:`.hippo_encode`) take the place of the turns: they a
 ranked, picked and listed the same way, an item is shown as its title and text
 (:meth:`Item.line`), reads as older when a newer item replaced it, and says which
 items it conflicts with.
+With ``[memory] weak_matches`` above 0 the list form adds, under the list and one
+line, :data:`WEAK_GUIDE`, a few matches that are under the vector bar but at least
+:data:`GATHER_COSINE` close (:func:`pick_weak`), for the model to open only if the
+message needs them; :func:`render_list_block` renders such a block from plain
+``(kind, cosine, text)`` entries, for evaluation outside a chat.
 """
 
 from __future__ import annotations
@@ -131,6 +136,12 @@ GATHER_GUIDE: Final = (
     "This asks for a count, total or comparison: open every listed item that may "
     "belong, search again with other words for each kind not listed yet, and count "
     "only what the items say."
+)
+# With ``[memory] weak_matches`` above 0: the line above the matches that are under the
+# vector bar (:func:`pick_weak`), after the list.
+WEAK_GUIDE: Final = (
+    "Weaker matches, maybe not about this message. Open one only if the message "
+    "needs it; otherwise do not mention them."
 )
 CUT_MARK: Final = "… (cut)"
 # With ``[memory] excerpt_open = "on"``: the line under the excerpts when one of them
@@ -405,6 +416,16 @@ class Item:
             f"[{self.ref}] {date} · {chat} · “{listed_title(self)}” · "
             f"{meaning}{older}{self._conflict()}"
         )
+
+    def weak_line(self, now: float | None = None, *, timed: bool = False) -> str:
+        """The item as one line of the weak matches under a list (:data:`WEAK_GUIDE`):
+        a turn's or an item's line is :meth:`listed`'s (its id, so ``open_memory`` opens
+        it, and the cosine); a note has no id to open, so it reads as in the list
+        (``- the user said “…” (chat “Plans”, Oct 30)``) with the cosine after it."""
+        if not self.is_record:
+            return self.listed(now, timed=timed)
+        meaning = "words" if self.similarity is None else f"{self.similarity:.2f}"
+        return f"- {self.line(now, timed=timed)} · {meaning}"
 
     def opened_heading(self, now: float | None = None) -> str:
         """The first line of a turn opened in full: its id, date and chat, and the
@@ -886,6 +907,86 @@ def vector_floor(
     return relative_floor([c for c, _ in scored], min_cosine, relative_z)
 
 
+def weak_scores(
+    corpus: Corpus,
+    query_vector: np.ndarray,
+    embed_model: str,
+    *,
+    exclude_session: str = "",
+    keep_from_turn: int | None = None,
+    notes: bool = True,
+    replaced: Mapping[tuple[str, int], Item] | None = None,
+) -> list[tuple[float, Item]]:
+    """The cosine to *query_vector* of each item of *corpus* that a recall may list
+    as a weak match (:func:`pick_weak`), with the item.
+
+    These are the items :func:`ranked` takes into the vector list: those with a
+    vector of *embed_model* of the shape of *query_vector* (:func:`vector_scores`),
+    without the turns of *exclude_session* from *keep_from_turn* on (:func:`in_view`).
+    Without *notes* (``[memory] recall_notes = "off"``) no note is one. An item a
+    newer one replaced (:attr:`Item.replaced_by`, or a turn that *replaced* maps to
+    a newer note or turn) is left out: the recall block gives the current value only.
+    """
+    scored: list[tuple[float, Item]] = []
+    for cosine, key in vector_scores(corpus, query_vector, embed_model):
+        item = corpus.items[key]
+        if item.is_record:
+            if not notes:
+                continue
+        elif in_view(item, exclude_session, keep_from_turn):
+            continue
+        if item.replaced_by or (
+            item.is_turn and (item.session_id, item.turn) in (replaced or {})
+        ):
+            continue
+        scored.append((cosine, item))
+    return scored
+
+
+def pick_weak(
+    scored: Iterable[tuple[float, Item]],
+    *,
+    floor: float,
+    limit: int,
+    listed: Iterable[Item] = (),
+) -> list[Item]:
+    """The weak matches of a list: the best *limit* of *scored* (each a cosine and its
+    item) whose cosine is at least :data:`GATHER_COSINE` and under *floor*, the
+    vector bar the list was made with, best first, each a copy that carries its
+    cosine (:attr:`Item.similarity`).
+
+    Nothing that the list already holds (*listed*) comes again: not the same item,
+    not another chunk of a turn it lists, and not a turn that a note it lists came
+    from (:func:`pick` leaves that turn out of the list too). One chunk of a turn
+    at most (the best). A note and a turn or an item may both be weak matches. With
+    a *floor* of :data:`GATHER_COSINE` or less there are none.
+    """
+    listed = list(listed)
+    taken = {item.key for item in listed}
+    turns = {(item.session_id, item.turn) for item in listed if item.is_turn}
+    said = {(item.session_id, item.turn) for item in listed if item.is_record}
+    rows = sorted(
+        (
+            (cosine, item)
+            for cosine, item in scored
+            if GATHER_COSINE <= cosine < floor and item.key not in taken
+        ),
+        key=lambda row: row[0],
+        reverse=True,
+    )
+    kept: list[Item] = []
+    for cosine, item in rows:
+        if len(kept) >= limit:
+            break
+        if item.is_turn:
+            turn = (item.session_id, item.turn)
+            if turn in turns or turn in said:
+                continue
+            turns.add(turn)
+        kept.append(dataclasses.replace(item, similarity=cosine))
+    return kept
+
+
 def ranked(
     corpus: Corpus,
     query: str,
@@ -1214,6 +1315,12 @@ def kept_lines(quotes: Sequence[str], *, refused: bool = False) -> list[str]:
     return lines + ([NOT_KEPT_LINE] if refused else [])
 
 
+def list_guide(items: bool) -> str:
+    """The line above a list: :data:`ITEM_LIST_GUIDE` for memory *items*, else
+    :data:`LIST_GUIDE` for chat turns."""
+    return ITEM_LIST_GUIDE if items else LIST_GUIDE
+
+
 def block(
     items: Iterable[Item],
     kept: Sequence[str] = (),
@@ -1225,6 +1332,28 @@ def block(
 ) -> tuple[str, list[Item]]:
     """The recall block a user message carries, and the items that fit in it, each
     a copy that holds the line the model reads (:attr:`Item.shown`).
+
+    This is :func:`block_with_weak` without weak matches; its doc says the rest.
+    """
+    text, used, _ = block_with_weak(
+        items, kept, chars, show, listing=listing, guide=guide
+    )
+    return text, used
+
+
+def block_with_weak(
+    items: Iterable[Item],
+    kept: Sequence[str] = (),
+    chars: int = BLOCK_CHARS,
+    show: Shown = HEADS,
+    *,
+    listing: bool = False,
+    guide: str = LIST_GUIDE,
+    weak: Sequence[Item] = (),
+) -> tuple[str, list[Item], list[Item]]:
+    """The recall block a user message carries, the items that fit in it, and the
+    weak matches it shows, each item a copy that holds the line the model reads
+    (:attr:`Item.shown`).
 
     The *kept* lines (:func:`kept_lines`) come first, with or without recall.
     Items are added while the block stays within *chars*
@@ -1239,6 +1368,14 @@ def block(
     less than the whole turn starts with its id (:meth:`Item.excerpt`), and
     :data:`CUT_GUIDE` follows the excerpts when at least one line has an id. That
     line counts toward *chars* as the others do, so the block stays within it.
+
+    With *listing* and *weak* (:func:`pick_weak`), :data:`WEAK_GUIDE` and one line
+    each (:meth:`Item.weak_line`) follow everything else, or stand alone with the
+    header when nothing else is listed. They count toward *chars* like any line, and
+    since the list is not bound by it, they are the part that is left out when there is
+    no room: from the first line that does not fit on, and with all of them goes the
+    guide line. An item the list holds is never shown again. The weak items shown are
+    the third result; with no *weak* the block is the one :func:`block` makes.
     """
     lines = [BLOCK_HEADER, *kept]
     fixed = len(lines)
@@ -1284,7 +1421,128 @@ def block(
         for n in turns:
             read[n] = used[n].listed(now, timed=used[n].key in same_day)
             lines.append(read[n])
-    text = "\n".join(lines) if used or kept else ""
-    return text, [
-        dataclasses.replace(item, shown=read[n]) for n, item in enumerate(used)
+    shown = _weak_shown(lines, candidates, weak, chars, now) if listing and weak else []
+    if shown:
+        lines.append(WEAK_GUIDE)
+        lines.extend(item.shown for item in shown)
+    text = "\n".join(lines) if used or kept or shown else ""
+    return (
+        text,
+        [dataclasses.replace(item, shown=read[n]) for n, item in enumerate(used)],
+        shown,
+    )
+
+
+def _weak_shown(
+    lines: Sequence[str],
+    listed: Sequence[Item],
+    weak: Sequence[Item],
+    chars: int,
+    now: float,
+) -> list[Item]:
+    """The leading *weak* matches that fit under *lines* within *chars* with
+    :data:`WEAK_GUIDE` above them, each a copy that holds its line (:attr:`Item.shown`).
+
+    An item of *listed* is skipped. A same-day partner that did not fit takes no
+    time of day in the line, as in :func:`block`."""
+    held = {item.key for item in listed}
+    fresh = [item for item in weak if item.key not in held]
+    same_day = times(fresh)
+    size = len("\n".join(lines)) + len(WEAK_GUIDE) + 1
+    fits = 0
+    for item in fresh:
+        size += len(item.weak_line(now, timed=item.key in same_day)) + 1
+        if size > chars:
+            break
+        fits += 1
+    fresh = fresh[:fits]
+    same_day = times(fresh)
+    return [
+        dataclasses.replace(item, shown=item.weak_line(now, timed=item.key in same_day))
+        for item in fresh
     ]
+
+
+_ENTRY_KEYS: Final = {"note": "r", "item": "m", "turn": "d"}
+_DAY_SECONDS: Final = 86_400.0
+
+
+def render_list_block(
+    entries: Sequence[tuple[str, float, str]],
+    *,
+    floor: float = MIN_COSINE,
+    weak_matches: int = 0,
+    items: bool = True,
+    chars: int = BLOCK_CHARS,
+) -> str:
+    """The recall block of the list form for a question whose similarity to each of
+    *entries* is known: the entry point for evaluation harnesses outside a chat.
+
+    An entry is ``(kind, cosine, text)``: *kind* is ``"note"``, ``"item"`` or
+    ``"turn"``, *cosine* the entry's similarity to the question, and *text* the
+    note's text, the item's title (a list line shows an item by its title only) or
+    the turn's document text (``User: …\\nmelo: …``). The entries from *floor*, the
+    vector bar, up are the list (best first, at most :data:`AUTO_RECORDS` notes and
+    :data:`LIST_MAX` items or turns, as a turn lists them); with *weak_matches* above
+    0 the best that many under *floor* and at least :data:`GATHER_COSINE` follow
+    under :data:`WEAK_GUIDE` (:func:`pick_weak`). With *items* the line above the
+    list is :data:`ITEM_LIST_GUIDE` (``recall_source = "items"``), else
+    :data:`LIST_GUIDE`. *chars* is the room of the block, :data:`BLOCK_CHARS` by
+    default.
+
+    It builds an :class:`Item` for each entry (the id is its place among the entries of
+    its kind, from 1, as a stored turn's, item's and note's are numbered apart; every
+    entry is in a "Main chat", the first of today and each next one a day older, so no
+    two lines share a day and none shows a time of day) and goes through
+    the code a turn's block does (:func:`block_with_weak`), so the text is the block
+    that turn shows, the header, guide lines and ids included. ``""`` when nothing is listed and no
+    weak match is shown. It does not read a stored memory, and it knows nothing of
+    notes that replace turns, ages or a question's words: the list is in the order of
+    the cosines.
+    """
+    now = clock.now()
+    scored: list[tuple[float, Item]] = []
+    numbers: Counter[str] = Counter()
+    for place, (kind, cosine, text) in enumerate(entries):
+        if kind not in _ENTRY_KEYS:
+            raise ValueError(f"unknown kind {kind!r}: use note, item or turn")
+        numbers[kind] += 1
+        n = numbers[kind]
+        made = now - place * _DAY_SECONDS
+        scored.append(
+            (
+                float(cosine),
+                Item(
+                    f"{_ENTRY_KEYS[kind]}:{n}",
+                    text,
+                    f"Main chat, {day(made)}",
+                    f"s{place}",
+                    place,
+                    made,
+                    quote=text if kind == "note" else "",
+                    title=text if kind == "item" else "",
+                ),
+            )
+        )
+    scored.sort(key=lambda row: row[0], reverse=True)
+    best = [
+        dataclasses.replace(item, similarity=cosine)
+        for cosine, item in scored
+        if cosine >= floor
+    ]
+    listed = pick(best, records=AUTO_RECORDS, docs=LIST_MAX, per_chat=None)
+    weak = (
+        pick_weak(scored, floor=floor, limit=weak_matches, listed=listed)
+        if weak_matches > 0
+        else []
+    )
+    text, _, _ = block_with_weak(
+        listed,
+        (),
+        chars,
+        HEADS,
+        listing=True,
+        guide=list_guide(items),
+        weak=weak,
+    )
+    return text

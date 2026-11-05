@@ -14,11 +14,12 @@ import {formatTime, t} from '../../support/gateway/static/i18n.mjs';
 import {workerHistory} from '../../support/gateway/static/worker-history.mjs';
 import {setupTasks} from '../../support/gateway/static/tasks.mjs';
 import {setupPanel as realSetupPanel} from '../../support/gateway/static/panel.mjs';
+import {liveRoute, liveUrl} from '../../support/gateway/static/browser-live.mjs';
 import {plainSegments, setupStatusRow} from '../../support/gateway/static/status-row.mjs';
 import {setupRunning} from '../../support/gateway/static/running.mjs';
 import {setupModelCard} from '../../support/gateway/static/setup-card.mjs';
 import {folderChoices, folderName, setupFolderPicker} from '../../support/gateway/static/folder.mjs';
-import {picturesNode, setupPictureBox} from '../../support/gateway/static/pictures.mjs';
+import {picturesNode, setupPictureBox, shotsNode, takenPictures} from '../../support/gateway/static/pictures.mjs';
 import * as composerMedia from '../../support/gateway/static/composer-media.mjs';
 import {memoryNodes} from '../../support/gateway/static/memory.mjs';
 import * as mainChat from '../../support/gateway/static/main-chat.mjs';
@@ -682,6 +683,7 @@ const source = readFileSync(new URL('../../support/gateway/static/workspace.js',
   .replace(/^import \{[^}]*\} from "\.\/status-row\.mjs";\n/m, '')
   .replace(/^import \{ setupRunning \} from "\.\/running\.mjs";\n/m, '')
   .replace(/^import \{ setupPanel \} from "\.\/panel\.mjs";\n/m, '')
+  .replace(/^import \{[^}]*\} from "\.\/browser-live\.mjs";\n/m, '')
   .replace(/^import \{[^}]*\} from "\.\/levels\.mjs";\n/m, '')
   .replace(/^import \{ setupModelCard \} from "\.\/setup-card\.mjs";\n/m, '')
   .replace(/^import \{ setupImportCard \} from "\.\/import-card\.mjs";\n/m, '')
@@ -852,6 +854,7 @@ function harness(routes, {mobile = false, realPanel = false} = {}) {
   const timers = [];
   const asked = [];
   const answer = {notes: 'keep'};
+  const browserLog = [];
   const documentListeners = {};
   const windowListeners = {};
   const root = makeElement('html');
@@ -889,7 +892,7 @@ function harness(routes, {mobile = false, realPanel = false} = {}) {
     opened: false, calls: [],
     open(tab) { this.opened = true; this.calls.push(tab); },
     close() { if (!this.opened) return false; this.opened = false; return true; },
-    selectTab(tab) { this.calls.push(`select:${tab}`); }, sessionChanged() {},
+    selectTab(tab) { this.calls.push(`select:${tab}`); }, sessionChanged() {}, modeChanged() {},
   };
   const context = vm.createContext({
     ...turns,
@@ -908,6 +911,8 @@ function harness(routes, {mobile = false, realPanel = false} = {}) {
     setupFolderPicker,
     picturesNode,
     setupPictureBox,
+    shotsNode,
+    takenPictures,
     ...composerMedia,
     memoryNodes,
     ...mainChat,
@@ -921,6 +926,21 @@ function harness(routes, {mobile = false, realPanel = false} = {}) {
     askAboutNotes: async (ask) => { asked.push(ask); return answer.notes; },
     setupSettings: () => async (section) => { context.settingsOpened = (context.settingsOpened || 0) + 1; context.settingsSection = section; },
     setupDrawer: () => drawer,
+    // The Browser panel has its own tests (test_browser_live.mjs); here the page only has to bind it to the open chat.
+    liveRoute,
+    liveUrl,
+    setupBrowser: () => ({
+      follow: async (id, options = {}) => { browserLog.push(['follow', id, options.liveOnly === true]); },
+      release: (next = '') => { browserLog.push(['release', next]); },
+      note: (frame) => { browserLog.push(['note', frame.type]); },
+      toggle() { browserLog.push(['toggle']); },
+      hide() { browserLog.push(['hide']); },
+      closeSheet() { return false; },
+      popOut() { browserLog.push(['popOut']); },
+      suspend() { browserLog.push(['suspend']); },
+      resume() { browserLog.push(['resume']); },
+      recheck: async () => { browserLog.push(['recheck']); },
+    }),
     // The panel beside the chat has its own tests (test_panel.mjs); here it only hears health.
     // `/memory import` opens its tab and presses "Look for notes": a test sets `notesOn` and reads `notesLooked`.
     // A task is drawn by tasks.mjs, which the real panel owns the place of: the double shows and leaves it the same way.
@@ -983,6 +1003,7 @@ function harness(routes, {mobile = false, realPanel = false} = {}) {
     timers,
     asked,
     answer,
+    browserLog,
     run: (expression) => vm.runInContext(expression, context),
     state: () => vm.runInContext('S', context),
     text: (id) => flatten(element(id)),
@@ -1004,7 +1025,7 @@ function session(id, extra = {}) {
 }
 
 const health = {
-  ok: true, configured: true, model: {backend: 'mlc', backend_label: 'MLC', name: 'Qwen-27B', embedding: 'none'},
+  ok: true, configured: true, model: {backend: 'mlc', backend_label: 'MLC', local: true, name: 'Qwen-27B', embedding: 'none'},
   sessions: {open: 0, running: 0, pending_approvals: 0, store: 'ok', store_error: '', resume_mode: 'pairs'},
 };
 
@@ -1129,7 +1150,7 @@ test('a 401 locks, preserves the draft, closes the stream and suppresses retries
   for (const timer of h.timers.filter((item) => item.interval)) await timer.handler();
   source.fail();
   assert.equal(h.net.calls.length, count);
-  assert.equal(h.state().stream.timer, null);
+  assert.equal(h.state().stream, null);
 });
 
 test('a stream failure closes browser retries and a 401 on reconnect locks', async () => {
@@ -1228,6 +1249,11 @@ test('an approval asks a plain question and puts the tool id in a caption', asyn
     ['browser-type:https://example.com', {site: 'example.com', access: 'type', how: 'type', text: 'hi'}, null, 'Let melo type on example.com?', 'browser · types text'],
     ['browser-submit:https://example.com', {site: 'example.com', access: 'submit', to: 'https://other.org/post', how: 'click'}, null, 'Let melo send a form from example.com?', 'browser · sends a form'],
     ['desktop-act:Chat', {app: 'Chat', access: 'desktop-act', how: 'press', on: '"Allow"', window: 'Sign in', button: 'Allow'}, null, 'Let melo press a button in Chat?', 'another app · presses a button'],
+    ['browser-point:https://example.com', {site: 'example.com', access: 'point', how: 'click', on: 'a password field'}, null, 'Let melo click at one spot on example.com?', 'browser · acts at one point'],
+    ['browser-point:https://example.com', {site: 'example.com', access: 'point', how: 'type into', on: 'a text field inside a box from login.example.org that melo cannot check', target: 'unknown'}, null, 'Let melo type into one spot on example.com?', 'browser · acts at one point'],
+    ['handoff:chat', {site: 'example.com', access: 'handoff', app: 'Chat', scheme: 'chat', url: 'chat://login?x=1', browser: 'chrome'}, null, 'Open Chat?', 'a page asks for an app'],
+    ['browser-dialog:https://example.com', {site: 'example.com', access: 'dialog', how: 'confirm', text: 'Delete the draft?', browser: 'chrome'}, null, 'Answer OK on example.com?', 'browser · the page asks'],
+    ['window-read:com.example.chat', {app: 'Chat', window: 'Sign in', bundle: 'com.example.chat', access: 'window-read'}, null, "Chat opened a window right after melo's click: let melo see it?", 'another app · its window'],
   ];
   for (const [tool, args, target, title, caption] of asks) {
     h.context.request = {request_id: `ask-${tool}-${title}`, tool_name: tool, arguments: args, workspace_label: '~/w', target};
@@ -1254,6 +1280,57 @@ test('an approval asks a plain question and puts the tool id in a caption', asyn
   const sending = findNode(h.run('approvalCard(request)'), (node) => node.className === 'approval-content');
   assert.equal(sending.textContent, 'https://other.org/post');
   assert.equal(sending.attributes['aria-label'], 'Where the form goes');
+  // A page that asks for another app shows the address melo would open, and what comes to the front.
+  h.context.request = {request_id: 'hand-off', tool_name: 'handoff:chat',
+    arguments: {site: 'example.com', access: 'handoff', app: 'Chat', scheme: 'chat', url: 'chat://login?x=1'}, workspace_label: '~/w'};
+  const handing = h.run('approvalCard(request)');
+  assert.equal(findNode(handing, (node) => node.className === 'approval-content').textContent, 'chat://login?x=1');
+  assert.match(findNode(handing, (node) => node.className === 'approval-note').textContent, /Chat comes to the front/);
+  assert.equal(findNode(handing, (node) => node.id === 'approval-scope-hand-off').textContent, 'In this chat, pages may open Chat again without asking.');
+  // Chrome in the background is worded for itself.
+  h.context.request = {request_id: 'open-chrome', tool_name: 'browser:https://example.com',
+    arguments: {site: 'example.com', access: 'read', browser: 'chrome'}, workspace_label: '~/w'};
+  const opening = h.run('approvalCard(request)');
+  assert.match(findNode(opening, (node) => node.className === 'approval-content').textContent, /in Chrome and read it\. Chrome runs in the background/);
+  // A click inside a box melo cannot check has its own words, the same in Ask and in Auto: where it lands, that melo cannot
+  // check it, and two answers. Auto's fixed "opaque" review is about code, so neither its title nor its reasons show.
+  const unknown = {site: 'example.com', access: 'point', how: 'click', target: 'unknown', browser: 'chrome',
+    on: 'inside a box from login.example.org that melo cannot check'};
+  const pointed = (id, review) => {
+    h.context.request = {request_id: id, tool_name: 'browser-point:https://example.com', arguments: unknown, workspace_label: '~/w',
+      offers_chat: false, ...(review ? {review} : {})};
+    return h.run('approvalCard(request)');
+  };
+  const opaque = {verdict: 'high', categories: ['opaque'], reasons: ['Clicks on example.com where melo cannot tell what it clicks.']};
+  const shape = (card) => ({
+    title: findNode(card, (node) => node.className === 'approval-title').textContent,
+    caption: findNode(card, (node) => node.className === 'approval-caption').textContent,
+    lands: findNode(card, (node) => node.className === 'approval-content').textContent,
+    note: findNode(card, (node) => node.className === 'approval-note').textContent,
+    rule: findNode(card, (node) => node.className === 'approval-warning').textContent,
+    reasons: ['approval-why', 'approval-reasons'].map((name) => findNode(card, (node) => node.className === name)),
+    answers: findNodes(card, (node) => 'approvalFocus' in node.dataset).map((node) => node.dataset.approvalFocus).filter((name) => name !== 'reason'),
+  });
+  const ask = shape(pointed('point-ask'));
+  assert.equal(ask.title, 'Let melo click at one spot on example.com?');
+  assert.equal(ask.lands, 'click inside a box from login.example.org that melo cannot check');
+  assert.match(ask.note, /in melo's browser, which runs in the background/);
+  assert.match(ask.note, /melo cannot check this one itself, so it asks every time/);
+  assert.deepEqual(ask.answers, ['once', 'deny'], 'no "allow for this chat" on a click melo cannot check');
+  assert.deepEqual(shape(pointed('point-auto', opaque)), ask, 'Auto asks with the same card, not "Run code melo cannot check?"');
+  assert.deepEqual(ask.reasons, [null, null]);
+  const {useLanguage} = await import('../../support/gateway/static/i18n.mjs');
+  await useLanguage('zh-Hans');
+  try {
+    const zh = shape(pointed('point-auto-zh', opaque));
+    assert.equal(zh.title, '让 melo 在 example.com 的某一处点击？');
+    assert.equal(zh.caption, '浏览器 · 在页面的某一处操作');
+    assert.match(zh.note, /这一步 melo 自己无法检查，所以每次都会问你/);
+    assert.deepEqual(zh.reasons, [null, null]);
+    assert.deepEqual(zh.answers, ['once', 'deny']);
+  } finally {
+    await useLanguage('en');
+  }
 });
 
 test("a press in another app's window says what is pressed and is asked every time", async () => {
@@ -1266,6 +1343,71 @@ test("a press in another app's window says what is pressed and is asked every ti
   assert.match(findNode(card, (node) => node.className === 'approval-content').textContent, /press "Allow" in Chat's window “Sign in”/);
   assert.match(findNode(card, (node) => node.className === 'approval-warning').textContent, /asks every time/);
   assert.deepEqual(focuses(card).filter((name) => name !== 'reason'), ['once', 'deny'], 'no "allow for this chat" on a press');
+  assert.equal(findNode(card, (node) => node.className === 'approval-note'), null, 'a press in the background has no note');
+  // A press at a point is asked once: the card says that the repeat in the foreground moves the pointer and brings the app forward.
+  h.context.request = {request_id: 'press-front', tool_name: 'desktop-act:Chat',
+    arguments: {app: 'Chat', access: 'desktop-act', how: 'press', on: 'a point (700, 850) of its picture', window: 'Sign in',
+      delivery: 'foreground_retry'}, workspace_label: '~/w'};
+  const front = h.run('approvalCard(request)');
+  assert.match(findNode(front, (node) => node.className === 'approval-note').textContent,
+    /the pointer moves there and Chat comes to the front for a moment/);
+  // Auto stopped it for the person (no review decides a press): the card keeps its own question and its two answers.
+  h.context.request = {request_id: 'press-auto', tool_name: 'desktop-act:Chat',
+    arguments: {app: 'Chat', access: 'desktop-act', how: 'press', on: '"Allow"', window: 'Sign in', button: 'Allow'},
+    workspace_label: '~/w', offers_chat: false,
+    review: {verdict: 'high', categories: ['opaque'], reasons: ['Pressing a button in another app\'s window is yours to decide, every time.']}};
+  const auto = h.run('approvalCard(request)');
+  assert.equal(findNode(auto, (node) => node.className === 'approval-title').textContent, 'Let melo press a button in Chat?');
+  assert.equal(findNode(auto, (node) => node.className === 'approval-caption').textContent, 'another app · presses a button');
+  assert.equal(findNode(auto, (node) => node.className === 'approval-why'), null, 'no review reason for the person to read');
+  assert.deepEqual(focuses(auto).filter((name) => name !== 'reason'), ['once', 'deny']);
+});
+
+test("a window another app opened is a question for the person, with the title for the person only and an allow for the chat", async () => {
+  const h = harness(baseRoutes());
+  await h.run('init()');
+  const focuses = (card) => findNodes(card, (node) => 'approvalFocus' in node.dataset).map((node) => node.dataset.approvalFocus);
+  const labels = (card) => findNodes(card, (node) => 'approvalFocus' in node.dataset && node.dataset.approvalFocus !== 'reason')
+    .map((node) => node.textContent);
+  const args = {app: 'Chat', window: 'Sign in to example.com', bundle: 'com.example.chat', access: 'window-read'};
+  // Ask: the window's title is shown (to the person), the chat-wide answer names the app.
+  h.context.request = {request_id: 'see', tool_name: 'window-read:com.example.chat', arguments: args, workspace_label: '~/w',
+    offers_chat: true};
+  const card = h.run('approvalCard(request)');
+  assert.equal(findNode(card, (node) => node.className === 'approval-content').textContent, 'Sign in to example.com');
+  assert.deepEqual(focuses(card).filter((name) => name !== 'reason'), ['once', 'session', 'deny']);
+  assert.ok(labels(card).includes('Allow Chat in this chat'), labels(card).join(' | '));
+  assert.match(findNode(card, (node) => node.className === 'approval-warning').textContent, /nothing about this window reaches melo's model/);
+  // Auto stopped it (it never decides this one): the card keeps its own question and the chat-wide answer.
+  h.context.request = {request_id: 'see-auto', tool_name: 'window-read:com.example.chat', arguments: args, workspace_label: '~/w',
+    offers_chat: true, review: {verdict: 'high', categories: ['opaque'], reasons: ['Another app put up a window right after a step; only you decide whether melo sees it.']}};
+  const auto = h.run('approvalCard(request)');
+  assert.equal(findNode(auto, (node) => node.className === 'approval-title').textContent,
+    "Chat opened a window right after melo's click: let melo see it?");
+  assert.deepEqual(focuses(auto).filter((name) => name !== 'reason'), ['once', 'session', 'deny']);
+  assert.ok(labels(auto).includes('Allow Chat in this chat'));
+  // No reasons list under it: the question says it all, and Auto's generic sentence would not.
+  const bare = (card) => ['approval-why', 'approval-reasons'].map((name) => findNode(card, (node) => node.className === name));
+  assert.deepEqual(bare(auto), [null, null]);
+  // The take-over card is the same in Auto, and so is the window card in Simplified Chinese.
+  const only = {verdict: 'high', categories: ['opaque'], reasons: ['Only you can take it over.']};
+  h.context.request = {request_id: 'take-auto', tool_name: 'takeover:https://example.com', workspace_label: '~/w', offers_chat: false,
+    arguments: {site: 'example.com', access: 'takeover', need: 'sign-in'}, review: only};
+  const take = h.run('approvalCard(request)');
+  assert.equal(findNode(take, (node) => node.className === 'approval-title').textContent, 'melo needs you to sign in on example.com');
+  assert.deepEqual(bare(take), [null, null]);
+  const {useLanguage} = await import('../../support/gateway/static/i18n.mjs');
+  await useLanguage('zh-Hans');
+  try {
+    h.context.request = {request_id: 'see-auto-zh', tool_name: 'window-read:com.example.chat', arguments: args, workspace_label: '~/w',
+      offers_chat: true, review: only};
+    const zh = h.run('approvalCard(request)');
+    assert.equal(findNode(zh, (node) => node.className === 'approval-title').textContent,
+      'Chat 在 melo 点击之后立刻打开了一个窗口：让 melo 看看吗？');
+    assert.deepEqual(bare(zh), [null, null]);
+  } finally {
+    await useLanguage('en');
+  }
 });
 
 test('a form send and typing show what goes, say when the page decides, and offer no answer that is kept', async () => {
@@ -1585,6 +1727,39 @@ test('pictures a turn made show as a row under its answer, and the row is reacha
   assert.match(flatten(h.element('picture-box')), /plot\.svg/);
 });
 
+test('the pictures melo took show under its steps, also once they are folded, and open at full size', async () => {
+  const h = harness(baseRoutes());
+  await h.run('init()');
+  const sha = 'a'.repeat(64);
+  h.stream().emit({id: 8, turn: 2, ts: 21, type: 'turn.started', data: {turn: 2, turn_id: 'turn-2', user_text: 'look at the page', client_request_id: null}});
+  h.stream().emit({id: 9, turn: 2, ts: 22, type: 'tool.started', data: {call_id: 'c1', name: 'browser_screenshot', step: 1, arguments: {}}});
+  h.stream().emit({id: 10, turn: 2, ts: 23, type: 'tool.finished', data: {call_id: 'c1', name: 'browser_screenshot', status: 'success',
+    output: 'A picture of https://example.com was taken and kept with this chat.', images: [{sha256: sha, mime_type: 'image/jpeg', size_bytes: 52000}]}});
+  const shots = () => findNode(h.element('messages'), (node) => node.className === 'pictures picture-shots');
+  assert.ok(shots(), 'the row shows while the turn runs');
+  h.stream().emit({id: 11, turn: 2, ts: 24, type: 'run.finished', data: {result: {result: 'Seen.', steps: 2}}});
+  h.stream().emit({id: 12, turn: 2, ts: 25, type: 'turn.finished', data: {turn: 2, turn_id: 'turn-2', status: 'completed'}});
+  const articles = findNodes(h.element('messages'), (node) => node.className === 'msg assistant');
+  const order = articles.at(-1).children.map((child) => child.className);
+  assert.ok(order.indexOf('pictures picture-shots') > order.indexOf('work-group'), 'under the steps');
+  assert.ok(order.indexOf('pictures picture-shots') < order.indexOf('answer'), 'above the answer');
+  const group = findNode(articles.at(-1), (node) => node.className === 'work-group');
+  assert.equal(group.open, false, 'the steps are folded');
+  const image = findNode(shots(), (node) => node.tag === 'img');
+  assert.equal(image.src, `/api/sessions/a/blobs/${sha}`);
+  findNode(shots(), (node) => node.className === 'picture').click();
+  assert.equal(h.element('picture-box').open, true);
+  assert.match(flatten(h.element('picture-box')), /Picture 1/);
+});
+
+test('saving Settings asks the Browser panel again whether the chat can be watched', async () => {
+  const h = harness(baseRoutes());
+  await h.run('init()');
+  h.browserLog.length = 0;
+  await h.run('settingsSaved({mode: "default"})');
+  assert.deepEqual(h.browserLog, [['recheck']]);
+});
+
 test('what memory recalled and kept shows under the message, and Undo forgets the note', async () => {
   const h = harness(baseRoutes({'DELETE /memory/records/7?undo=true': {status: 204}}));
   await h.run('init()');
@@ -1872,7 +2047,8 @@ test('title and independent banners follow active state without replacing notice
   await h.run('init()');
   h.state().health = {...health, configured: false, sessions: {...health.sessions, store: 'error', store_error: 'database offline'}};
   h.state().view.pending.set('req', {});
-  h.run('notify("Other error", {sticky: true}); S.stream.status = "paused"; S.stream.retryAt = 0; syncUI()');
+  h.stream().fail();
+  h.run('notify("Other error", {sticky: true}); syncUI()');
   assert.match(h.context.document.title, /localmelo · New chat · 1/);
   assert.match(h.element('store-banner').textContent, /database offline/);
   assert.match(h.element('model-banner').textContent, /No model/);
@@ -1888,7 +2064,8 @@ test('status banners do not rewrite unchanged live text', async () => {
   const h = harness(baseRoutes());
   await h.run('init()');
   h.state().health = {...health, configured: false, sessions: {...health.sessions, store: 'error', store_error: 'offline'}};
-  h.run('S.stream.status="paused"; S.stream.retryAt=0; syncUI()');
+  h.stream().fail();
+  h.run('syncUI()');
   const writes = {};
   for (const id of ['store-banner', 'model-banner', 'stream-banner-text']) {
     const node = h.element(id);
@@ -2186,19 +2363,27 @@ test('a failed turn draws a shared glyph, a plain title and one filled next step
 test('the model server error says what to check for a local server and for a cloud one', async () => {
   const h = harness(baseRoutes());
   await h.run('init()');
-  h.state().health = {...health, model: {...health.model, backend: 'vllm'}, model_server: {url_label: '127.0.0.1:8500', reachable: false}};
+  h.state().health = {...health, model: {...health.model, backend: 'vllm', local: true}, model_server: {url_label: '127.0.0.1:8500', reachable: false}};
   h.context.turn = turns.newTurn(turnRow({status: 'provider_error', result: {error: 'cannot reach the model server'}}));
   assert.match(flatten(h.run('statusNode(turn)')), /Is the model server running at 127\.0\.0\.1:8500\?/);
-  h.state().health = {...health, model: {...health.model, backend: 'openai'}};
+  h.state().health = {...health, model: {...health.model, backend: 'openai', local: false}};
   assert.match(flatten(h.run('statusNode(turn)')), /Check the API key and the model name in model settings/);
+});
+
+test('a backend the page has never heard of is local when the health says so', async () => {
+  const h = harness(baseRoutes());
+  await h.run('init()');
+  h.state().health = {...health, model: {...health.model, backend: 'acme', local: true}, model_server: {url_label: '127.0.0.1:9', reachable: false}};
+  h.context.turn = turns.newTurn(turnRow({status: 'provider_error', result: {error: 'cannot reach the model server'}}));
+  assert.match(flatten(h.run('statusNode(turn)')), /Is the model server running at 127\.0\.0\.1:9\?/);
 });
 
 test('an unreachable server gets a plain title, one hint, Try again first, and its raw error only under Details', async () => {
   const h = harness(baseRoutes());
   await h.run('init()');
-  h.state().health = {...health, model: {...health.model, backend: 'vllm'}, model_server: {url_label: 'http://127.0.0.1:9/v1', reachable: false}};
-  const make = (result = {}, backend = 'vllm') => {
-    h.state().health = {...h.state().health, model: {...health.model, backend}};
+  h.state().health = {...health, model: {...health.model, backend: 'vllm', local: true}, model_server: {url_label: 'http://127.0.0.1:9/v1', reachable: false}};
+  const make = (result = {}, backend = 'vllm', local = true) => {
+    h.state().health = {...h.state().health, model: {...health.model, backend, local}};
     const turn = turns.newTurn(turnRow({status: 'provider_error', result: {error: UNREACHABLE, n_tool: 0, ...result}}));
     h.state().view.turns = [turn];
     h.context.turn = turn;
@@ -2222,7 +2407,7 @@ test('an unreachable server gets a plain title, one hint, Try again first, and i
   h.state().view.turns = [h.context.turn, turns.newTurn(turnRow({id: 'next', turn: 2}))];
   assert.deepEqual(actions(h.run('statusNode(turn)')).map(([label]) => label), ['Change the server address', 'Copy error'], 'an older failure keeps only its links');
 
-  const cloud = make({error: 'cannot reach the model server at https://api.example.test/v1. Check the URL and the network. (ConnectError)'}, 'openai');
+  const cloud = make({error: 'cannot reach the model server at https://api.example.test/v1. Check the URL and the network. (ConnectError)'}, 'openai', false);
   assert.equal(part(cloud, 'failure-hint').textContent, 'Check your network connection, then try again.');
   assert.deepEqual(actions(cloud).map(([label]) => label), ['Try again', 'Open model settings', 'Copy error'], 'a hosted model has no address to change');
 
@@ -3065,6 +3250,34 @@ test('Stop gives the unread words back to the box and the turn starts nothing el
 
 // ── The note reducer on its own ──
 
+test('a note with pictures shows the ones it was sent with, then the references the gateway lists', () => {
+  const {view, turn} = started();
+  const shown = [{name: 'shot.png', url: '/api/uploads/up1', bytes: 3000}];
+  const item = turns.startNote(turn, 'look', 'k1', shown);
+  assert.deepEqual([item.pictures, item.images], [shown, []]);
+  const refs = [{sha256: 'ab'.repeat(32), mime_type: 'image/png', size_bytes: 3000}];
+  // The event comes before the answer: one item, with the references.
+  applyEvent(view, {id: 2, turn: 1, ts: 101, type: 'turn.note', data: {turn: 1, turn_id: 'turn-1', note: 5, text: 'look', images: refs}});
+  assert.equal(turn.items.filter((entry) => entry.kind === 'note').length, 1);
+  assert.deepEqual(item.images, refs);
+  turns.acknowledgeNote(turn, item, 5, refs);
+  assert.equal(turn.items.filter((entry) => entry.kind === 'note').length, 1);
+  assert.deepEqual(item.images, refs);
+});
+
+test('the answer of a send lists the pictures when the event has not come, and a note from another tab has them from its event', () => {
+  const {view, turn} = started();
+  const refs = [{sha256: 'cd'.repeat(32), mime_type: 'image/jpeg', size_bytes: 10}];
+  const item = turns.startNote(turn, '', 'k1', [{name: 'a.jpg', url: '/api/uploads/u', bytes: 10}]);
+  turns.acknowledgeNote(turn, item, 6, refs);
+  assert.deepEqual(item.images, refs);
+  applyEvent(view, {id: 3, turn: 1, ts: 102, type: 'turn.note', data: {turn: 1, turn_id: 'turn-1', note: 7, text: 'elsewhere', images: [...refs, {sha256: 'nope'}]}});
+  const heard = turn.items.find((entry) => entry.kind === 'note' && entry.note === 7);
+  assert.deepEqual([heard.text, heard.images, heard.pictures], ['elsewhere', refs, []], 'a reference that names no blob is ignored');
+  applyEvent(view, {id: 4, turn: 1, ts: 103, type: 'turn.note', data: {turn: 1, turn_id: 'turn-1', note: 8, text: 'plain'}});
+  assert.deepEqual(turn.items.find((entry) => entry.kind === 'note' && entry.note === 8).images, []);
+});
+
 test('a note is one item however its answer and its event arrive', () => {
   const {view, turn} = started();
   const item = turns.startNote(turn, 'hello', 'k1');
@@ -3397,6 +3610,18 @@ test('a closed stream reopens from the last event id', async () => {
   assert.equal(h.stream().url, '/api/sessions/a/events?after=12&watch=true');
 });
 
+test('a hidden page keeps following its chat', async () => {
+  const h = harness(baseRoutes());
+  await h.run('init()');
+  const source = h.stream();
+  h.context.document.hidden = true;
+  for (const handler of h.documentListeners.visibilitychange) handler();
+  assert.equal(source.closed, false);
+  source.emit({id: 12, turn: 1, ts: 30, type: 'turn.undone', data: {turn: 1, turn_id: 'turn-1'}});
+  assert.equal(h.state().view.lastEventId, 12, 'a frame that arrives while the page is hidden is folded in');
+  assert.equal(FakeEventSource.instances.length, 1);
+});
+
 test('the open chat\'s row follows the frames the page sees', async () => {
   const h = harness(baseRoutes());
   await h.run('init()');
@@ -3434,10 +3659,11 @@ test('a stream paused on a deleted chat starts a new one instead of reopening', 
   const routes = baseRoutes();
   const h = harness(routes);
   await h.run('init()');
-  h.stream().fail();
   routes['GET /sessions/a'] = {status: 404, body: {error: {code: 'not_found', message: 'Session not found.'}}};
+  h.stream().fail();
   const timer = h.timers.find((entry) => !entry.interval && entry.ms === 1000 && !entry.cleared);
-  await timer.handler();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(timer.cleared, true, 'The wait ends when the chat is found gone');
   assert.equal(FakeEventSource.instances.length, 1, 'No stream reopens on a chat that is gone');
   assert.equal(h.state().activeId, null);
   assert.match(h.element('notice').textContent, /This chat expired or the gateway restarted/);
@@ -4477,7 +4703,7 @@ test('a task that never started shows nothing live and reads no session', async 
   assert.equal(taskStream(h), undefined);
 });
 
-test('the live stream closes in a hidden tab, resumes after the last id, and ends with the task', async () => {
+test('the live stream ends with the task, and the card shows its steps', async () => {
   let state = 'running';
   let events = [liveStarted];
   const h = await openTask({
@@ -4485,22 +4711,13 @@ test('the live stream closes in a hidden tab, resumes after the last id, and end
     [TURNS_T1]: () => ({turns: [turnRow({user_text: 'Objective of t1', status: state === 'running' ? 'running' : 'completed', answer: '', events})], has_earlier: false}),
     'GET /sessions/t1/status': {session_id: 't1', segments: []},
   });
-  const first = taskStream(h);
-  first.emit(liveTool(2));
-  const visibility = h.documentListeners.visibilitychange.at(-1);
-  h.context.document.visibilityState = 'hidden';
-  visibility();
-  assert.equal(first.closed, true);
-  h.context.document.visibilityState = 'visible';
-  visibility();
-  assert.equal(taskStream(h).url, '/api/sessions/t1/events?after=2&watch=true');
-  assert.notEqual(taskStream(h), first);
-  const second = taskStream(h);
+  const stream = taskStream(h);
+  stream.emit(liveTool(2));
   state = 'done';
   events = [liveStarted, liveTool(2), liveTool(3)];
   const poll = h.timers.find((timer) => timer.interval && timer.ms === 3000);
   await poll.handler(); await settle();
-  assert.equal(second.closed, true, 'the stream ends when the task is done');
+  assert.equal(stream.closed, true, 'the stream ends when the task is done');
   assert.equal(taskReads(h), 2, 'one more read catches up with the last events');
   assert.equal(findNode(liveBox(h), (node) => node.classList.contains('tool-card')) !== null, true);
   assert.equal(findNode(liveBox(h), (node) => node.textContent === 'Live'), null, 'a task that ended is no longer Live');
@@ -5463,7 +5680,7 @@ test('the Ask/Auto menu lists the sites this chat allowed, each with Remove (#46
       session: session('a', {approvals: 'auto'}), pending_approvals: [], grants: ['python_exec', name, 'browser:https://docs.example'],
       granted_at: {}, mcp_error: '', agent: 'not_loaded', tokens: 0,
     },
-    [`DELETE /sessions/a/grants/${encodeURIComponent(name)}`]: {status: 204},
+    [`DELETE /sessions/a/grants/${encodeURIComponent(name)}`]: {revoked: [{key: name, scope: 'session'}], everywhere: false},
   }));
   await h.run('init()');
   h.element('mode-btn').click();
@@ -5480,6 +5697,68 @@ test('the Ask/Auto menu lists the sites this chat allowed, each with Remove (#46
   assert.equal(h.net.callsTo(`/sessions/a/grants/${encodeURIComponent(name)}`)[0].method, 'DELETE');
   assert.deepEqual(h.state().view.grants, ['python_exec', 'browser:https://docs.example']);
   assert.doesNotMatch(flatten(h.element('mode-menu')), /news\.example/);
+  assert.match(h.text('notice'), /Removed\. melo asks again next time\./);
+  assert.doesNotMatch(h.text('notice'), /everywhere/);
+});
+
+test('a side chat\'s menu marks the sites the main chat allowed, and removing one says it went everywhere', async () => {
+  const own = 'browser:https://docs.example';
+  const fromMain = 'browser-act:https://news.example';
+  const h = harness(sideRoutes({
+    'GET /settings': {mode: 'default', approvals: 'ask'},
+    'GET /sessions/a': {
+      session: session('a', {title: 'Plan the trip'}), pending_approvals: [], grants: ['python_exec', fromMain, own], grants_everywhere: [fromMain],
+      granted_at: {}, mcp_error: '', agent: 'not_loaded', tokens: 0,
+    },
+    [`DELETE /sessions/a/grants/${encodeURIComponent(fromMain)}`]: {revoked: [{key: fromMain, scope: 'global'}], everywhere: true},
+  }));
+  await h.run('init()');
+  await openSide(h);
+  assert.deepEqual(h.state().view.grantsEverywhere, [fromMain]);
+  h.element('mode-btn').click();
+  const rows = () => findNodes(h.element('mode-menu'), (node) => node.className === 'mode-grant');
+  const marks = () => rows().map((row) => [findNode(row, (node) => node.className === 'mode-grant-what').textContent,
+    findNode(row, (node) => String(node.className).includes('mode-grant-from'))?.textContent ?? null]);
+  assert.deepEqual(marks(), [
+    ['Click and choose on news.example', 'From the main chat · removing it takes it away everywhere'],
+    ['Open and read docs.example', null],
+  ]);
+  const remove = findNode(rows()[0], (node) => node.tag === 'button');
+  const from = findNode(rows()[0], (node) => String(node.className).includes('mode-grant-from'));
+  assert.equal(remove.attributes['aria-describedby'], from.id, 'Remove is described by where the grant came from');
+  assert.equal(findNode(rows()[1], (node) => node.tag === 'button').attributes['aria-describedby'], undefined);
+  await remove.click();
+  await settle();
+  assert.equal(h.net.callsTo(`/sessions/a/grants/${encodeURIComponent(fromMain)}`)[0].method, 'DELETE');
+  assert.match(h.text('notice'), /Taken back everywhere\./);
+  assert.deepEqual(h.state().view.grants, ['python_exec', own]);
+  assert.deepEqual(h.state().view.grantsEverywhere, []);
+  assert.deepEqual(marks(), [['Open and read docs.example', null]]);
+});
+
+test('the menu reads in Chinese for a grant from the main chat', async () => {
+  const fromMain = 'browser:https://docs.example';
+  const h = harness(sideRoutes({
+    'GET /settings': {mode: 'default', approvals: 'ask'},
+    'GET /sessions/a': {
+      session: session('a', {title: 'Plan the trip'}), pending_approvals: [], grants: [fromMain], grants_everywhere: [fromMain],
+      granted_at: {}, mcp_error: '', agent: 'not_loaded', tokens: 0,
+    },
+    [`DELETE /sessions/a/grants/${encodeURIComponent(fromMain)}`]: {revoked: [{key: fromMain, scope: 'global'}], everywhere: true},
+  }));
+  await h.run('init()');
+  await openSide(h);
+  const {useLanguage} = await import('../../support/gateway/static/i18n.mjs');
+  await useLanguage('zh-Hans');
+  try {
+    h.element('mode-btn').click();
+    assert.match(flatten(h.element('mode-menu')), /来自主对话 · 收回后在所有对话中都不再允许/);
+    await findNode(h.element('mode-menu'), (node) => node.tag === 'button' && node.textContent === '移除').click();
+    await settle();
+    assert.match(h.text('notice'), /已在所有对话中收回。/);
+  } finally {
+    await useLanguage('en');
+  }
 });
 
 test('a chat that allowed no site shows no list in its menu', async () => {
@@ -6016,6 +6295,161 @@ test('the folder card in a task says this task, and reads in Simplified Chinese'
   }
 });
 
+// ── What the main chat allows counts everywhere ──
+
+const EVERYWHERE = 'In the main chat this counts in every chat, the tasks you start and the terminal, until you revoke it in Settings → Permissions.';
+const answersOf = (card) => findNode(card, (node) => node.className === 'approval-actions').children.map((node) => node.textContent);
+const ruleOf = (card, id) => findNode(card, (node) => node.id === `approval-scope-${id}`).textContent;
+const everywhereLine = (card) => findNode(card, (node) => String(node.className).includes('approval-everywhere'));
+const askOf = (extra) => ({request_id: 'q', tool_name: 'file_read', arguments: {path: 'a.txt'}, arguments_complete: true, workspace_label: '~/w', ...extra});
+
+test('the main chat\'s own approval card says each kept answer counts in every chat', async () => {
+  const h = harness(mainRoutes());
+  await h.run('init()');
+  assert.equal(h.state().activeId, 'm');
+  // A tool: the answer, the rule and the line below it.
+  h.context.request = askOf();
+  const card = h.run('approvalCard(request)');
+  assert.deepEqual(answersOf(card), ['Allow once', 'Allow in every chat', 'Deny']);
+  assert.equal(ruleOf(card, 'q'), 'melo will not ask again before using file_read in any chat.');
+  assert.equal(everywhereLine(card).textContent, EVERYWHERE);
+  assert.doesNotMatch(flatten(card), /this chat/);
+  const order = card.children.map((node) => node.className);
+  assert.ok(order.indexOf('approval-warning') < order.indexOf('approval-warning approval-everywhere'), 'the line follows the rule');
+  const keep = findNode(card, (node) => node.textContent === 'Allow in every chat');
+  assert.match(keep.attributes['aria-describedby'], /approval-scope-q approval-wide-q/);
+  // Commands and code, writes, a site and acting on it.
+  const rules = (extra) => { h.context.request = askOf({request_id: 'r', ...extra }); const made = h.run('approvalCard(request)'); return [answersOf(made)[1], ruleOf(made, 'r'), everywhereLine(made)?.textContent]; };
+  assert.deepEqual(rules({tool_name: 'shell_exec', arguments: {command: 'ls'}}), ['Allow in every chat',
+    '“Allow in every chat” lets routine shell commands run without asking in any chat. Installs, downloads and changes outside ~/w still ask.', EVERYWHERE]);
+  assert.equal(rules({tool_name: 'python_exec', arguments: {code: 'print(1)'}})[1],
+    '“Allow in every chat” lets routine Python code run without asking in any chat. Installs, downloads and changes outside ~/w still ask.');
+  assert.equal(rules({tool_name: 'file_write', arguments: {path: 'a', content: 'x'}, target: {path_label: 'a', exists: false, size_bytes: 0}})[1],
+    'melo will not ask again before writing files in any chat.');
+  assert.equal(rules({tool_name: 'browser:https://a.example', arguments: {site: 'a.example'}})[1], 'melo will not ask again before opening a.example in any chat.');
+  assert.equal(rules({tool_name: 'browser:https://a.example', arguments: {site: 'a.example', via: 'web_fetch', url: 'https://a.example/x'}})[1],
+    'melo will not ask again before reading or opening a.example in any chat.');
+  assert.equal(rules({tool_name: 'browser-act:https://a.example', arguments: {site: 'a.example'}})[1],
+    'melo will not ask again before clicking or choosing on a.example in any chat. Typing still asks every time.');
+  // A page that asks for another app: the kept answer covers that kind of address in any chat.
+  assert.deepEqual(rules({tool_name: 'handoff:chat', arguments: {site: 'example.com', access: 'handoff', app: 'Chat', scheme: 'chat', url: 'chat://login?x=1'}}),
+    ['Allow in every chat', 'In any chat, pages may open Chat again without asking.', EVERYWHERE]);
+  // A window another app opened names the app.
+  const see = rules({tool_name: 'window-read:com.example.chat', arguments: {app: 'Chat', window: 'Sign in'}, offers_chat: true});
+  assert.deepEqual([see[0], see[2]], ['Allow Chat everywhere', EVERYWHERE]);
+  assert.match(see[1], /“Allow Chat everywhere” lets melo see Chat's later windows in any chat/);
+  // A folder outside the workspace.
+  h.context.request = outsideRead();
+  const folder = h.run('approvalCard(request)');
+  assert.deepEqual(answersOf(folder), ['Allow once', 'Allow this folder in every chat', 'Always allow this folder', 'Deny']);
+  assert.equal(ruleOf(folder, 'out'), '“Allow this folder in every chat” covers every chat, the tasks you start and the terminal. “Always” keeps ~/Documents/letters in Settings, under Chats and folders, where you can remove it. Writing there still asks every time.');
+  assert.equal(everywhereLine(folder).textContent, EVERYWHERE);
+  // Typing, a form and a high-impact call keep nothing: they say nothing about everywhere.
+  for (const extra of [{tool_name: 'browser-type:https://a.example', arguments: {site: 'a.example', text: 'hi'}},
+    {tool_name: 'browser-submit:https://a.example', arguments: {site: 'a.example', fields: []}},
+    {review: {verdict: 'high', categories: ['delete'], reasons: ['Deletes x.']}}]) {
+    h.context.request = askOf({request_id: 'once', ...extra});
+    const once = h.run('approvalCard(request)');
+    assert.deepEqual(answersOf(once), ['Allow once', 'Deny']);
+    assert.equal(everywhereLine(once), null);
+    assert.doesNotMatch(flatten(once), /Allow in every chat|Allow for this chat|counts in every chat/);
+  }
+  h.context.request = askOf({request_id: 'high', tool_name: 'shell_exec', arguments: {command: 'pip install x'}, review: {verdict: 'high', categories: ['install'], reasons: ['Installs x.']}});
+  assert.equal(ruleOf(h.run('approvalCard(request)'), 'high'), 'An allow in every chat never covers installs, downloads or changes outside ~/w.');
+});
+
+test('in the main chat the remembered note and the Deny view follow the wider answer', async () => {
+  const h = harness(mainRoutes());
+  await h.run('init()');
+  h.context.request = askOf({remembered: true});
+  const card = h.run('approvalCard(request)');
+  const kept = findNode(card, (node) => node.className === 'approval-remembered');
+  assert.equal(kept.textContent, 'Your Allow also lets every chat, the tasks you start and the terminal run this exact step later without asking, until you revoke it.');
+  const line = everywhereLine(card);
+  h.run('approvalStates.get("q").mountedAt -= 1000');
+  h.timers.findLast((timer) => timer.ms <= 500).handler();
+  quietDeny(card).click();
+  assert.deepEqual([line.hidden, kept.hidden], [true, true], 'Deny shows only its reason box');
+  findNode(card, (node) => node.textContent === 'Back').click();
+  assert.deepEqual([line.hidden, kept.hidden], [false, false]);
+});
+
+test('in the main chat the wider answer posts the same choice a chat answer does', async () => {
+  for (const [label, choice] of [['Allow once', 'once'], ['Allow in every chat', 'session']]) {
+    const h = harness(mainRoutes({'POST /approvals/post': {outcome: 'allowed'}}));
+    await h.run('init()');
+    h.context.request = askOf({request_id: 'post', tool_name: 'shell_exec', arguments: {command: 'pwd'}});
+    h.run('S.view.pending.set("post", request)');
+    const card = h.run('approvalCard(request)');
+    const target = findNode(card, (node) => node.textContent === label);
+    h.run('approvalStates.get("post").mountedAt -= 1000');
+    h.timers.findLast((timer) => timer.ms <= 500).handler();
+    await target.click();
+    assert.deepEqual(h.net.callsTo('/approvals/post')[0].body, {choice});
+  }
+});
+
+test('a side chat\'s card says this chat, and a task\'s card says this task, even in the main chat', async () => {
+  const side = harness(sideRoutes());
+  await side.run('init()');
+  await openSide(side);
+  assert.equal(side.state().activeId, 'a');
+  side.context.request = askOf({remembered: true});
+  const card = side.run('approvalCard(request)');
+  assert.deepEqual(answersOf(card), ['Allow once', 'Allow for this chat', 'Deny']);
+  assert.equal(ruleOf(card, 'q'), 'melo will not ask again before using file_read in this chat.');
+  assert.equal(everywhereLine(card), null);
+  assert.match(findNode(card, (node) => node.className === 'approval-remembered').textContent, /^Your Allow also lets this chat's tasks/);
+  side.context.request = outsideRead();
+  assert.deepEqual(answersOf(side.run('approvalCard(request)')), ['Allow once', 'Allow this folder for this chat', 'Always allow this folder', 'Deny']);
+  side.context.request = askOf({tool_name: 'window-read:com.example.chat', arguments: {app: 'Chat', window: 'x'}, offers_chat: true});
+  assert.equal(answersOf(side.run('approvalCard(request)'))[1], 'Allow Chat in this chat');
+  // A task's card, drawn while the main chat is open, keeps its own words.
+  const main = harness(mainRoutes());
+  await main.run('init()');
+  assert.equal(main.state().activeId, 'm');
+  main.context.request = askOf({remembered: true});
+  const task = main.run('approvalCard(request, {...chatApproval, scope: "task"})');
+  assert.deepEqual(answersOf(task), ['Allow once', 'Allow for this task', 'Deny']);
+  assert.equal(ruleOf(task, 'q'), 'melo will not ask again before using file_read in this task.');
+  assert.equal(everywhereLine(task), null);
+  assert.match(findNode(task, (node) => node.className === 'approval-remembered').textContent, /^Your Allow also lets later tasks from the same chat/);
+  main.context.request = outsideRead();
+  assert.equal(answersOf(main.run('approvalCard(request, {...chatApproval, scope: "task"})'))[1], 'Allow this folder for this task');
+  main.context.request = askOf({request_id: 'see-task', tool_name: 'window-read:com.example.chat', arguments: {app: 'Chat', window: 'x'}, offers_chat: true});
+  const seeTask = main.run('approvalCard(request, {...chatApproval, scope: "task"})');
+  assert.equal(answersOf(seeTask)[1], 'Allow Chat for this task');
+  assert.match(ruleOf(seeTask, 'see-task'), /“Allow Chat for this task” lets melo see Chat's later windows in this task/);
+  // The chat before any is open (no main chat in the list) is not the main chat.
+  const none = harness(baseRoutes());
+  await none.run('init()');
+  none.context.request = askOf();
+  assert.equal(answersOf(none.run('approvalCard(request)'))[1], 'Allow for this chat');
+});
+
+test('the main chat\'s card reads in Simplified Chinese', async () => {
+  const h = harness(mainRoutes());
+  await h.run('init()');
+  const {useLanguage} = await import('../../support/gateway/static/i18n.mjs');
+  await useLanguage('zh-Hans');
+  try {
+    h.context.request = askOf({remembered: true});
+    const card = h.run('approvalCard(request)');
+    assert.deepEqual(answersOf(card), ['允许一次', '在所有对话中允许', '拒绝']);
+    assert.equal(ruleOf(card, 'q'), '在所有对话里，melo 使用 file_read 前不会再问你。');
+    assert.equal(everywhereLine(card).textContent, '在主对话里允许的在所有对话、你开始的任务和终端里都算，直到你在“设置 → 授权”里收回。');
+    assert.match(findNode(card, (node) => node.className === 'approval-remembered').textContent, /^你的允许也会让所有对话、你开始的任务和终端/);
+    h.context.request = outsideRead({request_id: 'zh'});
+    assert.equal(answersOf(h.run('approvalCard(request)'))[1], '在所有对话中允许这个文件夹');
+    h.context.request = askOf({request_id: 'see', tool_name: 'window-read:com.example.chat', arguments: {app: 'Chat', window: 'x'}, offers_chat: true});
+    assert.equal(answersOf(h.run('approvalCard(request)'))[1], '在所有对话中允许 Chat');
+    h.context.request = askOf({request_id: 'sh', tool_name: 'shell_exec', arguments: {command: 'ls'}});
+    assert.equal(ruleOf(h.run('approvalCard(request)'), 'sh'), '“在所有对话中允许”让常规的 shell 命令在所有对话里不再询问就运行。安装、下载和 ~/w 之外的改动仍会询问。');
+  } finally {
+    await useLanguage('en');
+  }
+});
+
 // ── What the step will do, in one plain sentence, first on the card (#454) ──
 
 const SAFARI_SCRIPT = "import subprocess\nscript = '''\ntell application \"Safari\"\n  close (every tab of front window whose URL contains \"example.com\")\nend tell\n'''\nsubprocess.run(['osascript', '-e', script])";
@@ -6464,26 +6898,155 @@ test('a drop the page cannot use never leaves the page: files, links, and files 
   assert.equal(h.element('drop-hint').hidden, true);
 });
 
-test('while melo works, a picture cannot join the turn: a drop is told so, and Send keeps the picture and posts nothing', async () => {
-  const h = await runningChat({'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png')});
+const WORKING = {id: 20, turn: 2, ts: 50, type: 'turn.started', data: {turn: 2, turn_id: 'turn-2', user_text: 'A long task', client_request_id: 'k2'}};
+const noteWithPicture = (number, text, extra = {}) => noteReply(number, text, {images: [{sha256: SHA, mime_type: 'image/png', size_bytes: 3000}], ...extra});
+
+test('while melo works, a picture is dropped, pasted or picked into the strip like any other time', async () => {
+  const h = await runningChat({
+    'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png'),
+    'POST /uploads?name=image.png': stagedPicture('up2', 'image.png'),
+    'POST /uploads?name=chosen.jpg': stagedPicture('up3', 'chosen.jpg', {mime_type: 'image/jpeg'}),
+  });
   await dropFiles(h, [fileOf('shot.png', 'image/png')]);
-  assert.deepEqual(h.net.callsTo('/uploads?name=shot.png'), []);
-  assert.match(h.text('notice'), /Pictures and files cannot join a turn that is running\./);
+  assert.equal(h.net.callsTo('/uploads?name=shot.png').length, 1);
+  const [paste] = h.element('input').listeners.paste;
+  paste({clipboardData: {files: [fileOf('image.png', 'image/png')], getData: () => ''}, preventDefault() {}});
+  await settle();
+  assert.equal(h.net.callsTo('/uploads?name=image.png').length, 1);
+  let opened = 0;
+  h.element('media-input').click = () => { opened += 1; };
   h.element('attach-btn').click();
-  assert.match(h.text('notice'), /Pictures and files cannot join a turn that is running\./);
+  assert.equal(opened, 1, 'the picker opens while melo works');
+  const chooser = h.element('media-input');
+  chooser.files = [fileOf('chosen.jpg', 'image/jpeg')];
+  chooser.listeners.change[0]();
+  await settle();
+  assert.equal(tiles(h, 'media-thumb').length, 3);
+  assert.equal(h.text('notice'), '', 'nothing is refused');
 });
 
-test('a picture that waits in the strip when a turn starts is not lost to a note', async () => {
-  const h = harness(baseRoutes({'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png'), 'POST /turns/turn-2/notes': noteReply(1, 'hello')}));
-  await h.run('init()');
+test('while melo works, a text file is told it cannot join, from a drop and from the picker', async () => {
+  const h = await runningChat({'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png')});
+  await dropFiles(h, [textFile('notes.md', 'hello')]);
+  assert.match(h.text('notice'), /Text files cannot join a turn that is running\./);
+  assert.equal(h.element('media-tray').hidden, true, 'nothing was added');
+  // Dropped together, the picture joins and only the text file is refused.
+  await dropFiles(h, [fileOf('shot.png', 'image/png'), textFile('notes.md', 'hello')]);
+  assert.equal(tiles(h, 'media-thumb').length, 1);
+  assert.match(h.text('notice'), /Text files cannot join a turn that is running\./);
+  const chooser = h.element('media-input');
+  chooser.files = [textFile('more.txt', 'x')];
+  chooser.listeners.change[0]();
+  await settle();
+  assert.equal(tiles(h, 'media-thumb').length, 1, 'the picker added nothing');
+  assert.equal(h.element('media-tray').hidden, false);
+});
+
+test('Send while melo works posts the strip\'s pictures with the words as one note, and no turn', async () => {
+  const h = await runningChat({
+    'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png'),
+    'POST /turns/turn-2/notes': noteWithPicture(1, 'use this one'),
+  });
   await dropFiles(h, [fileOf('shot.png', 'image/png')]);
-  h.stream().emit({id: 20, turn: 2, ts: 50, type: 'turn.started', data: {turn: 2, turn_id: 'turn-2', user_text: 'A long task', client_request_id: 'k2'}});
+  h.element('input').value = 'use this one';
+  h.element('input').listeners.input?.forEach((handler) => handler());
+  assert.equal(h.element('send-btn').disabled, false);
+  await h.run('send()');
+  const [call] = h.net.callsTo('/turns/turn-2/notes');
+  assert.equal(call.body.text, 'use this one');
+  assert.deepEqual(call.body.images, ['up1']);
+  assert.ok(call.body.client_request_id);
+  assert.deepEqual(h.net.callsTo('/sessions/a/turns'), [], 'no second turn is started');
+  assert.equal(h.element('media-tray').hidden, true, 'the strip is empty once the note is out');
+  assert.equal(h.element('input').value, '');
+  // The note shows its picture beside its words, and says melo reads it at the next step.
+  const bubble = findNodes(h.element('messages'), (node) => node.className === 'user-bubble note-bubble has-media')[0];
+  assert.ok(bubble, 'the note bubble has media');
+  assert.equal(findNodes(bubble, (node) => node.className === 'bubble-picture').length, 1);
+  assert.match(flatten(bubble), /use this one/);
+  assert.match(h.text('messages'), /Sent\. melo reads it at its next step\./);
+});
+
+test('a picture alone, with no words, is a note too', async () => {
+  const h = await runningChat({
+    'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png'),
+    'POST /turns/turn-2/notes': noteWithPicture(1, ''),
+  });
+  await dropFiles(h, [fileOf('shot.png', 'image/png')]);
+  assert.equal(h.element('send-btn').disabled, false, 'a picture can be sent without words');
+  await h.run('send()');
+  const [call] = h.net.callsTo('/turns/turn-2/notes');
+  assert.deepEqual([call.body.text, call.body.images], ['', ['up1']]);
+  const bubble = findNodes(h.element('messages'), (node) => node.className.startsWith('user-bubble note-bubble'))[0];
+  assert.equal(findNodes(bubble, (node) => node.className === 'bubble-words').length, 0, 'no empty line of words');
+  assert.equal(findNodes(bubble, (node) => node.className === 'bubble-picture').length, 1);
+});
+
+test('a text file in the strip when Send is pressed during a turn is kept, with the words, and nothing is posted', async () => {
+  const h = harness(baseRoutes({'POST /turns/turn-2/notes': noteReply(1, 'hello')}));
+  await h.run('init()');
+  await dropFiles(h, [textFile('notes.md', 'body')]);
+  h.stream().emit(WORKING);
   h.element('input').value = 'hello';
   await h.run('send()');
-  assert.deepEqual(h.net.callsTo('/turns/turn-2/notes'), [], 'the words do not go alone while a picture waits');
-  assert.equal(tiles(h, 'media-thumb').length, 1, 'the picture stays');
+  assert.deepEqual(h.net.callsTo('/turns/turn-2/notes'), [], 'the words do not go alone while a file waits');
+  assert.deepEqual(tiles(h, 'media-chip-name').map((node) => node.textContent), ['notes.md']);
   assert.equal(h.element('input').value, 'hello');
-  assert.match(h.text('notice'), /cannot join a turn that is running/);
+  assert.match(h.text('notice'), /Text files cannot join a turn that is running/);
+});
+
+test('a note the gateway refuses gives the words and the pictures back', async () => {
+  const refused = {status: 409, body: {error: {code: 'model_text_only', message: 'The chosen model cannot read pictures.'}}};
+  const h = await runningChat({'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png'), 'POST /turns/turn-2/notes': refused});
+  await dropFiles(h, [fileOf('shot.png', 'image/png')]);
+  h.element('input').value = 'look';
+  await h.run('send()');
+  assert.equal(h.element('input').value, 'look');
+  assert.equal(tiles(h, 'media-thumb').length, 1, 'the picture is back in the strip');
+  assert.match(h.text('notice'), /Could not add that: The chosen model cannot read pictures\./);
+  assert.doesNotMatch(h.text('messages'), /Sent\. melo reads it/);
+});
+
+test('a note refused because the turn just ended is sent as a message with its pictures', async () => {
+  const h = await runningChat({
+    'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png'),
+    'POST /turns/turn-2/notes': {status: 409, body: {error: {code: 'turn_not_running', message: 'that turn is not running'}}},
+    'POST /sessions/a/turns': {status: 202, body: {turn_id: 'turn-3', turn: turnRow({turn_id: 'turn-3', turn: 3, user_text: 'late'})}},
+  });
+  await dropFiles(h, [fileOf('shot.png', 'image/png')]);
+  // The page still thinks the turn runs when the words are sent; the gateway knows it ended.
+  h.element('input').value = 'late';
+  await h.run('send()');
+  assert.equal(h.net.callsTo('/turns/turn-2/notes').length, 1, 'the note was tried first');
+  const [sent] = h.net.callsTo('/sessions/a/turns');
+  assert.ok(sent, 'it went out as a message');
+  assert.deepEqual([sent.body.text, sent.body.images], ['late', ['up1']]);
+  assert.equal(h.element('media-tray').hidden, true, 'the pictures went with it');
+});
+
+test('Stop gives the pictures of unread notes back to the strip beside their words', async () => {
+  const back = {id: 'up9', name: 'photo.png', mime_type: 'image/png', size_bytes: 3000, width: 640, height: 480, model_reads: true};
+  const h = await runningChat({
+    'POST /uploads?name=shot.png': stagedPicture('up1', 'shot.png'),
+    'POST /turns/turn-2/notes': noteWithPicture(4, 'not that way'),
+    'POST /turns/turn-2/cancel': {status: 202, body: {turn_id: 'turn-2', cancelling: true, unread_notes: [{note: 4, text: 'not that way', images: [back]}]}},
+  });
+  await dropFiles(h, [fileOf('shot.png', 'image/png')]);
+  h.element('input').value = 'not that way';
+  await h.run('send()');
+  assert.equal(h.element('media-tray').hidden, true);
+  await h.run('stop()');
+  assert.equal(h.element('input').value, 'not that way');
+  const [thumb] = tiles(h, 'media-thumb');
+  assert.equal(thumb.src, '/api/uploads/up9', 'the picture is staged again and waits in the strip');
+});
+
+test('a note\'s pictures are drawn from the chat\'s blobs once the event lists them', async () => {
+  const h = await runningChat();
+  h.stream().emit({id: 21, turn: 2, ts: 51, type: 'turn.note', data: {turn: 2, turn_id: 'turn-2', note: 3, text: 'from the stream', images: [{sha256: SHA, mime_type: 'image/png', size_bytes: 3000}]}});
+  const shown = findNodes(h.element('messages'), (node) => node.className === 'bubble-picture');
+  assert.equal(shown.length, 1);
+  assert.equal(findNode(shown[0], (node) => node.tag === 'img').src, `/api/sessions/a/blobs/${SHA}`);
 });
 
 test('a picture and words that the gateway refuses stay visible in the failed message, and Cancel gives them back', async () => {
@@ -6556,4 +7119,87 @@ test('closing the chat that held pictures forgets them at the gateway', async ()
   await settle();
   assert.equal(h.net.callsTo('/uploads/up1').length, 1);
   assert.equal(h.element('media-tray').hidden, true, 'the new chat that follows starts clean');
+});
+
+// ── The Browser panel (browser-live.mjs; its own tests are in test_browser_live.mjs) ──
+
+test('the Browser panel follows the open chat, reads its events and lets go when the chat is left', async () => {
+  const h = harness(baseRoutes({'GET /sessions': {sessions: [session('a'), session('b')], machine: null, has_more: false},
+    'GET /sessions/b': {session: session('b'), pending_approvals: [], grants: [], granted_at: {}, mcp_error: '', agent: 'not_loaded', tokens: 0},
+    'GET /sessions/b/turns?limit=10': {turns: [], has_earlier: false, replay_from: 0}}));
+  await h.run('init()');
+  assert.deepEqual(h.browserLog.filter(([kind]) => kind === 'follow'), [['follow', 'a', false]]);
+  h.stream().emit({id: 20, turn: 2, ts: 50, type: 'tool.started', data: {call_id: 'c1', name: 'browser_open', step: 1, arguments: {}}});
+  assert.ok(h.browserLog.some((entry) => entry[0] === 'note' && entry[1] === 'tool.started'));
+  h.browserLog.length = 0;
+  await h.run('openSession("b")');
+  assert.deepEqual(h.browserLog.filter(([kind]) => kind !== 'note'), [['release', 'b'], ['follow', 'b', false]]);
+  h.browserLog.length = 0;
+  h.run('newChat()');
+  assert.deepEqual(h.browserLog, [['release', '']]);
+});
+
+test('a stream that starts again for the same chat does not drop the Browser panel', async () => {
+  const h = harness(baseRoutes());
+  await h.run('init()');
+  h.browserLog.length = 0;
+  h.stream().fail();
+  assert.equal(h.browserLog.some(([kind]) => kind === 'release'), false);
+});
+
+test('locking the page lets the Browser panel go', async () => {
+  const h = harness(baseRoutes({'GET /sessions/a/tools': {status: 401}}));
+  await h.run('init()');
+  h.browserLog.length = 0;
+  await h.run('api("/sessions/a/tools").catch(() => {})');
+  assert.deepEqual(h.browserLog.filter(([kind]) => kind === 'release'), [['release', '']]);
+});
+
+test('#/live/<chat> shows the Browser panel alone and loads no chats', async () => {
+  const h = harness(baseRoutes());
+  h.context.location.hash = '#/live/a';
+  await h.run('init()');
+  assert.equal(h.element('app').hidden, false);
+  assert.equal(h.root.dataset.view, 'live');
+  assert.deepEqual(h.browserLog, [['follow', 'a', true]]);
+  assert.equal(h.net.callsTo('/sessions').length, 0, 'the window has no chat list to load');
+  assert.equal(h.stream(), undefined, 'and no event stream');
+  assert.equal(h.root.dataset.ready, '1');
+  await h.windowListeners.hashchange?.[0]?.({});
+  assert.deepEqual(h.browserLog, [['follow', 'a', true]], 'a changed address does not turn the window into the workspace');
+});
+
+test('a task or the schedule shown in Melo\'s panel gives way to the Browser panel where they do not both fit', async () => {
+  const h = harness(baseRoutes({'GET /tasks/t1': {id: 't1'}}));
+  await h.run('init()');
+  h.browserLog.length = 0;
+  await h.run('showScheduled()');
+  assert.ok(h.browserLog.some(([kind]) => kind === 'hide'));
+});
+
+test('a page that is hidden for a while, or kept for Back, lets go of the Browser stream and takes it up again', async () => {
+  const h = harness(baseRoutes());
+  await h.run('init()');
+  h.browserLog.length = 0;
+  const hide = h.documentListeners.visibilitychange.at(-1);
+  h.context.document.hidden = true;
+  hide();
+  assert.deepEqual(h.browserLog, [], 'not at once: a glance away is not leaving');
+  const wait = h.timers.filter((timer) => !timer.interval && timer.ms === 20000 && !timer.cleared).at(-1);
+  wait.handler();
+  assert.deepEqual(h.browserLog, [['suspend']]);
+  h.context.document.hidden = false;
+  hide();
+  assert.deepEqual(h.browserLog, [['suspend'], ['resume']]);
+  h.browserLog.length = 0;
+  h.context.document.hidden = true;
+  hide();
+  h.context.document.hidden = false;
+  hide();
+  assert.ok(h.timers.filter((timer) => timer.ms === 20000).every((timer, index, all) => index === all.length - 1 || timer.cleared), 'coming back in time cancels the wait');
+  assert.deepEqual(h.browserLog, [['resume']]);
+  h.browserLog.length = 0;
+  h.windowListeners.pagehide[0]({persisted: true});
+  h.windowListeners.pageshow[0]({persisted: true});
+  assert.deepEqual(h.browserLog, [['suspend'], ['resume']]);
 });

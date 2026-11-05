@@ -512,14 +512,16 @@ export function approvalTag(status, errorCategory, approval) {
 
 /**
  * The person's words added to a turn while melo works. Each is an item of the turn's work:
- * `{kind: "note", key, note, text, sending, seen, step, returned}`. `note` is the number the
- * gateway gave it (the run's `inbox.accepted` names it as `offset`); it is null until the
+ * `{kind: "note", key, note, text, pictures, images, sending, seen, step, returned}`. `note` is the
+ * number the gateway gave it (the run's `inbox.accepted` names it as `offset`); it is null until the
  * gateway answers or its `turn.note` event arrives, whichever is first. A note is shown as
  * sending, sent (the run reads it at its next step), seen, or, when its turn ended first,
- * as the next message, or, after a Stop, as given back to the box.
+ * as the next message, or, after a Stop, as given back to the box. A note may carry pictures:
+ * `pictures` are the ones the person added, `{name, url, bytes}`, shown until the gateway lists
+ * them as `images` (the references a turn's events carry, served by the chat's blobs).
  */
-export function startNote(turn, text, key) {
-  const item = {kind: "note", key, note: null, text, sending: true, seen: false, step: 0, returned: false};
+export function startNote(turn, text, key, pictures = []) {
+  const item = {kind: "note", key, note: null, text, pictures, images: [], sending: true, seen: false, step: 0, returned: false};
   turn.items.push(item);
   return item;
 }
@@ -529,8 +531,8 @@ function findNote(turn, number) {
   return number === null ? null : turn.items.find((item) => item.kind === "note" && item.note === number) ?? null;
 }
 
-/** The gateway answered a send: *item* has its number, unless its event came first and made another item. */
-export function acknowledgeNote(turn, item, number) {
+/** The gateway answered a send: *item* has its number (and its pictures, *images*), unless its event came first and made another item. */
+export function acknowledgeNote(turn, item, number, images = []) {
   const heard = findNote(turn, number);
   if (heard !== null && heard !== item) {
     const at = turn.items.indexOf(item);
@@ -540,19 +542,24 @@ export function acknowledgeNote(turn, item, number) {
   }
   item.note = number;
   item.sending = false;
+  if (item.images.length === 0) item.images = pictureRefs(images);
   return item;
 }
 
 /** A `turn.note` event: a note of this turn, shown once however it came. */
-function noteHeard(turn, number, text) {
+function noteHeard(turn, number, text, images) {
   if (number === null || findNote(turn, number) !== null) return;
-  const local = turn.items.find((item) => item.kind === "note" && item.note === null && item.text === text);
+  const refs = pictureRefs(images);
+  const local = turn.items.find(
+    (item) => item.kind === "note" && item.note === null && item.text === text && item.pictures.length === refs.length,
+  );
   if (local) {
     local.note = number;
     local.sending = false;
+    local.images = refs;
     return;
   }
-  turn.items.push({kind: "note", key: "", note: number, text, sending: false, seen: false, step: 0, returned: false});
+  turn.items.push({kind: "note", key: "", note: number, text, pictures: [], images: refs, sending: false, seen: false, step: 0, returned: false});
 }
 
 /** An `inbox.accepted` event: the run read note *offset*. False when the turn has no such note. */
@@ -1041,7 +1048,7 @@ export function applyEvent(view, frame, {ignoreCursor = false} = {}) {
       // The status row shows the numbers; a line per request would bury the work.
       break;
     case "turn.note": {
-      noteHeard(turn, int(data.note), String(data.text ?? ""));
+      noteHeard(turn, int(data.note), String(data.text ?? ""), data.images);
       break;
     }
     case "inbox.accepted": {
@@ -1118,6 +1125,118 @@ export function applyEvent(view, frame, {ignoreCursor = false} = {}) {
       break;
   }
   return {};
+}
+
+// ── Following a session's events ──
+
+// New frames are drawn together, at most this often.
+const DRAW_MS = 150;
+// Seconds to wait before each new try after a stream ends; the last wait repeats.
+const RECONNECT_S = [1, 2, 4, 8, 16, 30];
+
+function openEventSource(url) {
+  return typeof EventSource === "function" ? new EventSource(url) : null;
+}
+
+/**
+ * Follow `GET /api/sessions/{id}/events` from `view.lastEventId`. Every frame
+ * newer than the view is folded into it with `applyEvent` and handed to
+ * `onFrame(frame, outcome)` (`outcome` is what `applyEvent` returns); with
+ * `onDraw`, it is called once per `DRAW_MS` after new frames, so a view is
+ * redrawn once for a burst. `watch` tells the gateway that this page shows the
+ * session to a person, so a step Auto stops asks on its card (#465).
+ *
+ * The chat, the task card and the worker view all follow through this, by
+ * the same two rules:
+ *
+ * - A hidden page keeps following; nothing here reads the page's visibility.
+ *   A page that shows a session is watching it, and a card Auto shows can be
+ *   answered when the person comes back within its wait.
+ * - A stream that ends is opened again after the last id folded, following
+ *   1, 2, 4, 8, 16 and then 30 s; a stream that opens starts the count over.
+ *   `onEnd()` is asked at each end, and `false` (or a promise of it) stops the
+ *   follow: a worker run that finished, a chat that is gone. The new stream
+ *   waits for the answer, and an `onEnd` that fails does not stop the follow.
+ *
+ * Returns `{status, retryAt, retryNow(), close()}`: `status` is `live`, or
+ * `paused` while it waits to open again (`retryAt`, in seconds, says when);
+ * `onStatus()` is called when it changes; `retryNow()` skips the wait. Returns
+ * null where there is no EventSource, so the caller reads the session instead.
+ * `open(url)` makes the EventSource; `schedule`, `cancel` and `now` are the
+ * clock.
+ */
+export function followEvents({
+  id, view, watch = false, onFrame, onDraw = null, onStatus = null, onEnd = null,
+  open = openEventSource, schedule = setTimeout, cancel = clearTimeout, now = () => Date.now() / 1000,
+}) {
+  const follower = {status: "live", retryAt: 0, retryNow, close};
+  let source = null;
+  let wait = null;
+  let draw = null;
+  let verdict = null;
+  let attempt = 0;
+  let closed = false;
+
+  function connect() {
+    const next = open(`/api/sessions/${encodeURIComponent(id)}/events?after=${view.lastEventId}${watch ? "&watch=true" : ""}`);
+    if (next === null) return false;
+    source = next;
+    next.onopen = () => {
+      if (source !== next) return;
+      attempt = 0;
+      setStatus("live");
+    };
+    next.onmessage = (message) => {
+      if (source === next) frame(message.data);
+    };
+    next.onerror = () => {
+      if (source === next) ended();
+    };
+    return true;
+  }
+  function setStatus(status) {
+    follower.status = status;
+    onStatus?.();
+  }
+  function frame(data) {
+    let event;
+    try { event = JSON.parse(data); } catch { return; }
+    if (!isObject(event) || (typeof event.id === "number" && event.id <= view.lastEventId)) return;
+    onFrame(event, applyEvent(view, event));
+    if (onDraw !== null) draw ??= schedule(() => { draw = null; onDraw(); }, DRAW_MS);
+  }
+  function ended() {
+    source.close();
+    source = null;
+    const seconds = RECONNECT_S[Math.min(attempt, RECONNECT_S.length - 1)];
+    attempt += 1;
+    follower.retryAt = now() + seconds;
+    setStatus("paused");
+    verdict = (async () => onEnd?.())().catch(() => true);
+    verdict.then((more) => { if (more === false) close(); });
+    if (!closed) wait = schedule(reopen, seconds * 1000);
+  }
+  async function reopen() {
+    wait = null;
+    if ((await verdict) === false || closed) return;
+    setStatus("live");
+    connect();
+  }
+  async function retryNow() {
+    if (wait === null) return;
+    cancel(wait);
+    await reopen();
+  }
+  function close() {
+    if (closed) return;
+    closed = true;
+    source?.close();
+    source = null;
+    for (const timer of [wait, draw]) if (timer !== null) cancel(timer);
+    wait = draw = null;
+  }
+
+  return connect() ? follower : null;
 }
 
 // ── What a turn says ──

@@ -82,7 +82,7 @@ from localmelo.support.sessions.attachments import (
     decode_attachments,
     encode_attachments,
 )
-from localmelo.support.sessions.display import home_label
+from localmelo.support.sessions.display import home_label, short_title
 from localmelo.support.sessions.submissions import (
     WITHDRAWN_ERROR,
     SubmissionConflict,
@@ -179,7 +179,8 @@ SESSION_EVENT_FIELDS: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
         "turn.finished": frozenset({"turn", "turn_id", "status", "error", "cause"}),
         "turn.undone": frozenset({"turn", "turn_id"}),
         "turn.pictures": frozenset({"turn", "turn_id", "pictures"}),
-        "turn.note": frozenset({"turn", "turn_id", "note", "text"}),
+        # images: the pictures that came with the words, as references into blobs.
+        "turn.note": frozenset({"turn", "turn_id", "note", "text", "images"}),
         "turn.memory": frozenset(
             {
                 "turn",
@@ -228,6 +229,8 @@ OPTIONAL_SESSION_EVENT_FIELDS: Final[Mapping[str, frozenset[str]]] = MappingProx
     {
         # images: the pictures the person added, as references into blobs.
         "turn.started": frozenset({"origin", "images"}),
+        # Only on a note that carried pictures.
+        "turn.note": frozenset({"images"}),
         # searched and opened: only once a memory search found something, or the
         # model opened a turn, in the turn.
         "turn.memory": frozenset({"searched", "opened", "search_hint", "digest"}),
@@ -242,13 +245,16 @@ PICTURES_EVENT_TYPE: Final = "turn.pictures"
 MEMORY_EVENT_TYPE: Final = "turn.memory"
 # Words the person added to a running turn; the run's ``inbox.accepted`` says when it read them.
 NOTE_EVENT_TYPE: Final = "turn.note"
+# A core event: a run read words the person added (offset, text, step, attempt); the text is redacted.
+INBOX_ACCEPTED_EVENT_TYPE: Final = "inbox.accepted"
+# A core event: a tool call ended (status, error_category, output, error, ...).
+TOOL_FINISHED_EVENT_TYPE: Final = "tool.finished"
 # The grammar of an event type with a reserved prefix.
 RESERVED_EVENT_TYPE_RE: Final = re.compile(r"[a-z]+(\.[a-z_]+)+")
 
 CLOSED_ERROR: Final = "The session store is closed"
 FAILED_ERROR: Final = "The session store could not record a change; restart the gateway"
 
-_TITLE_CHARS: Final = 60
 _MAX_TITLE_CHARS: Final = 200
 _DAY_S: Final = 86_400.0
 # The owner each writer's file names in the "belongs to" error.
@@ -553,17 +559,6 @@ def _encodable(value: str | None, name: str) -> None:
         value.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise ValueError(f"{name} must be valid UTF-8") from exc
-
-
-def title_from_text(text: str) -> str:
-    """*text* with its whitespace collapsed, in at most 60 characters.
-
-    A longer text keeps its first 59 characters and ends with ``…``.
-    """
-    collapsed = " ".join(text.split())
-    if len(collapsed) <= _TITLE_CHARS:
-        return collapsed
-    return collapsed[: _TITLE_CHARS - 1] + "…"
 
 
 def check_title(title: object) -> str:
@@ -1258,64 +1253,6 @@ class SessionStore:
         await self._check_file(conn)
 
     # ── Components ──
-
-    @staticmethod
-    async def _component_version(conn: aiosqlite.Connection, name: str) -> int | None:
-        rows = await _rows(
-            conn, "SELECT version FROM schema_components WHERE name = ?", (name,)
-        )
-        return int(rows[0][0]) if rows else None
-
-    async def ensure_component(
-        self, name: str, version: int, statements: Sequence[str]
-    ) -> int:
-        """Create a named component at *version*, atomically, or check it.
-
-        The gateway's file only: a terminal ``melo`` file never holds the
-        scheduler's tables. The read of ``schema_components``, the creation
-        of *statements* and the version row are one ``BEGIN IMMEDIATE``
-        transaction, so two opens cannot half-create a component. A file
-        whose component is newer than *version* is refused with
-        :class:`SessionStoreError`, the way a newer ``user_version`` is;
-        this release has no migration from an older one. Returns *version*.
-        """
-        if self._writer != "gateway":
-            raise SessionStoreError(
-                f"The {name} component needs the gateway's store, not the "
-                f"{_OWNERS[self._writer]}'s"
-            )
-        if not isinstance(name, str) or not name:
-            raise ValueError("a component's name must be a non-empty string")
-        if isinstance(version, bool) or not isinstance(version, int) or version < 1:
-            raise ValueError("a component's version must be an integer >= 1")
-        if isinstance(statements, str) or not all(
-            isinstance(statement, str) and statement.strip() for statement in statements
-        ):
-            raise ValueError("a component's statements must be SQL strings")
-        async with self._lock:
-            conn = await self._ready()
-            self._check_writable()
-            async with self._transaction(conn, f"component_{name}"):
-                current = await self._component_version(conn, name)
-                if current is None:
-                    for statement in statements:
-                        await conn.execute(statement)
-                    await conn.execute(
-                        "INSERT INTO schema_components (name, version) VALUES (?, ?)",
-                        (name, version),
-                    )
-                    return version
-                if current > version:
-                    raise SessionStoreError(
-                        f"{self._path} has {name} schema version {current}; this "
-                        f"localmelo reads version {version}"
-                    )
-                if current < version:
-                    raise SessionStoreError(
-                        f"{self._path} has {name} schema version {current}; this "
-                        f"localmelo cannot migrate it to version {version}"
-                    )
-                return current
 
     @contextlib.asynccontextmanager
     async def component_transaction(
@@ -2083,6 +2020,33 @@ class SessionStore:
             found.append(ImagePart.from_bytes(blob[1], blob[0]))
         return found
 
+    async def put_blobs(self, session_id: str, images: Sequence[ImagePart]) -> None:
+        """Keep the payloads of *images* in the session's blobs, once per digest.
+
+        For pictures that come with words added to a running turn: they are
+        kept before the note is accepted, so the page can show them and a note
+        that becomes the next turn, or survives a restart, can send them.
+        ``ValueError`` for an image without its payload;
+        :class:`SessionStoreError` for an unknown session.
+        """
+        rows: list[tuple[str, str, str, bytes]] = []
+        for image in images:
+            raw = decode_base64(image.data) if image.data else None
+            if raw is None:
+                raise ValueError("a picture of a note needs its data")
+            rows.append((session_id, image.sha256, image.mime_type, raw))
+        async with self._lock:
+            conn = await self._ready()
+            self._check_writable()
+            async with self._transaction(conn, "put_blobs"):
+                await self._require_session(conn, session_id)
+                for row in rows:
+                    await conn.execute(
+                        "INSERT OR IGNORE INTO blobs (session_id, sha256, mime_type, "
+                        "data) VALUES (?, ?, ?, ?)",
+                        row,
+                    )
+
     async def get_window(self, session_id: str) -> StoredWindow | None:
         """The session's window checkpoint, or ``None``."""
         async with self._lock:
@@ -2176,6 +2140,64 @@ class SessionStore:
         return [
             StoredEvent(row[0], session_id, row[1], json.loads(row[2]))
             for row in reversed(rows)
+        ]
+
+    async def read_notes(self, session_id: str, turn: int) -> list[str]:
+        """The words the person added to turn *turn* that its run read, in read order.
+
+        The redacted ``text`` of the turn's ``inbox.accepted`` events (a note the
+        run never read has none: it became the next turn); an empty text is left
+        out. Nothing from another turn of the session.
+        """
+        async with self._lock:
+            conn = await self._ready()
+            rows = await _rows(
+                conn,
+                "SELECT event FROM events WHERE session_id = ? AND turn = ? "
+                "AND type = ? ORDER BY id",
+                (session_id, turn, INBOX_ACCEPTED_EVENT_TYPE),
+            )
+        texts = (json.loads(row[0]).get("data", {}).get("text") for row in rows)
+        return [text for text in texts if isinstance(text, str) and text.strip()]
+
+    async def turn_tool_results(
+        self,
+        session_id: str,
+        turn: int,
+        *,
+        head: int = 400,
+        last: int | None = None,
+    ) -> list[tuple[str, str, str]]:
+        """How the tool calls of turn *turn* ended, in the order they finished (or only
+        the last *last* of them): ``(status, error_category, text head)`` for each
+        ``tool.finished`` event.
+
+        The head is the first *head* characters of the call's error, or of its
+        output when it has none; the rest of a long output is not read out of the
+        store. A call that was never reported finished has no entry; nothing from
+        another turn of the session.
+        """
+        text = "json_extract(event, '$.data.%s')"
+        async with self._lock:
+            conn = await self._ready()
+            rows = await _rows(
+                conn,
+                f"SELECT {text % 'status'}, {text % 'error_category'}, "
+                f"substr(coalesce(nullif({text % 'error'}, ''), "
+                f"{text % 'output'}, ''), 1, ?) "
+                "FROM events WHERE session_id = ? AND turn = ? AND type = ? "
+                "ORDER BY id DESC LIMIT ?",
+                (
+                    head,
+                    session_id,
+                    turn,
+                    TOOL_FINISHED_EVENT_TYPE,
+                    -1 if last is None else last,
+                ),
+            )
+        return [
+            (str(status or ""), str(category or ""), str(words or ""))
+            for status, category, words in reversed(rows)
         ]
 
     async def events_of_type_anywhere(
@@ -2470,7 +2492,7 @@ class SessionStore:
                 # 6. The lease, and 7. the first title.
                 new_title = None
                 if not current_title and not origin:
-                    new_title = title_from_text(typed or user_text)
+                    new_title = short_title(typed or user_text)
                 await conn.execute(
                     "UPDATE sessions SET lease_holder = ?, lease_until = ?, "
                     "updated_at = ?, title = COALESCE(?, title) WHERE id = ?",
@@ -3233,7 +3255,9 @@ class SessionStore:
         so here none is (a call at startup is harmless). One transaction per
         turn (T-3): ``approval.resolved`` (``withdrawn``) for each request
         nobody answered, the outcome, ``turn.finished``, and the lease
-        cleared. Idempotent: a second call changes nothing.
+        cleared. Idempotent: a second call changes nothing. Nothing in melo
+        calls this directly (recovery runs inside the store); it is the public
+        handle the recovery tests use.
         """
         async with self._lock:
             conn = await self._ready()

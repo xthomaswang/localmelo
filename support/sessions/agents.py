@@ -219,7 +219,6 @@ def configured_session_options(
         name: getattr(cfg.agent, name)
         for name in (
             "reasoning",
-            "replay_turns",
             "note_writer",
             *CACHE_SETTINGS,
             *IMAGE_SETTINGS,
@@ -497,10 +496,7 @@ async def build_session_agent(
         timeout: dict[str, Any] = (
             {} if request_timeout_s is None else {"timeout": request_timeout_s}
         )
-        if (
-            agent_options.reasoning in ("replay", "compress+replay")
-            and reasoning_field is not None
-        ):
+        if agent_options.reasoning == "compress+replay" and reasoning_field is not None:
             timeout["reasoning_field"] = reasoning_field
         llm = OpenAICompatLLM(base_url=base_url, model=model or "default", **timeout)
         embedding = (

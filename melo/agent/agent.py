@@ -280,17 +280,16 @@ def _replay_plan(
 
     The first list is the window to send. In ``legacy`` it is *window*
     itself, unchanged. Otherwise it is a new list in which an assistant
-    message keeps its thinking only in ``replay`` and ``compress+replay``,
-    in scope (the current task from *task_query* on, or the whole window),
-    among the newest ``replay_turns`` such turns, and within
+    message keeps its thinking only in ``compress+replay``, in scope (the
+    current task from *task_query* on, or the whole window), and within
     :data:`REPLAY_TURN_CAP`; a message that fails one of these is a copy
     with an empty thinking, one that passes is the original object. The
     second list holds the indexes in *window* of the assistant turns whose
     thinking was left out because it exceeds :data:`REPLAY_TURN_CAP` (empty
-    on a replay-required provider, and in ``legacy``/``drop``). On a
-    replay-required provider the whole window is replayed: the task scope,
-    ``replay_turns`` and the cap do not apply, since a turn the server needs
-    is not one the caller can leave out.
+    on a replay-required provider, and in ``legacy``/``compress``). On a
+    replay-required provider the whole window is replayed: the task scope
+    and the cap do not apply, since a turn the server needs is not one the
+    caller can leave out.
     """
     if options.reasoning == "legacy":
         return window, []
@@ -304,23 +303,18 @@ def _replay_plan(
             if msg is task_query:
                 start = index
                 break
-    in_scope = [
+    keep = {
         index
         for index, msg in enumerate(window)
         if index >= start and msg.role == "assistant" and msg.thinking
-    ]
-    keep = (
-        set(in_scope)
-        if requires_replay or options.replay_turns is None
-        else set(in_scope[-options.replay_turns :])
-    )
+    }
     sent: list[Message] = []
     skipped: list[int] = []
     for index, msg in enumerate(window):
         if msg.role != "assistant" or not msg.thinking:
             sent.append(msg)
             continue
-        if options.reasoning not in ("replay", "compress+replay") or index not in keep:
+        if options.reasoning != "compress+replay" or index not in keep:
             sent.append(dataclasses.replace(msg, thinking=""))
             continue
         if not requires_replay and len(msg.thinking) > REPLAY_TURN_CAP:
@@ -1147,12 +1141,11 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         ):
             # A provider that requires replay cannot omit thinking, so
             # compress runs as compress+replay and the run reports the arm
-            # it actually ran. replay_turns=None and the task scope are
-            # what replay itself uses on such a provider.
+            # it actually ran. The task scope is what replay itself uses on
+            # such a provider.
             self.options = dataclasses.replace(
                 self.options,
                 reasoning="compress+replay",
-                replay_turns=None,
                 replay_scope="task",
             )
         # The API user's error; the CLI refuses the same pairs before it
@@ -1327,14 +1320,7 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         if self.options.reasoning in NOTE_MODES:
             instruction = NOTE_INSTRUCTION
             if self.options.reasoning == "compress+replay":
-                kept = self.options.replay_turns
-                if kept is not None:
-                    step = "step" if kept == 1 else "steps"
-                    sentence = (
-                        f"Your thinking is kept for your last {kept} {step}; "
-                        "older steps keep only their notes."
-                    )
-                elif self._requires_replay:
+                if self._requires_replay:
                     sentence = "Your thinking is kept for every step in the window."
                 else:
                     sentence = "Your thinking is kept for every step of this task."
@@ -2009,10 +1995,10 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
 
         The request carries :func:`_replay_plan`'s window, fitted when it is
         sent (see :class:`Chat`; a request the prompt check refuses raises
-        :class:`PromptCapError`). In ``replay`` the characters of thinking
-        the fitted request carries are counted, and a turn it carries that
-        was skipped for the per-turn cap is counted too (see
-        :meth:`_count_sent`); in ``drop`` both are zero; in ``legacy``
+        :class:`PromptCapError`). In ``compress+replay`` the characters of
+        thinking the fitted request carries are counted, and a turn it carries
+        that was skipped for the per-turn cap is counted too (see
+        :meth:`_count_sent`); in ``compress`` both are zero; in ``legacy``
         neither counter is used. An explicit-mode reply's inline
         ``<think>`` block is moved into thinking before the run reads it,
         so the result and tool-hint scan see the clean answer.
@@ -4226,8 +4212,8 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         memory-write check refuses is replaced by
         :data:`~localmelo.melo.schema.ANSWER_NOT_KEPT_LABEL` with the
         check's reason. The result itself is not changed. On a provider that
-        requires reasoning replay, ``replay`` also keeps the thinking of the
-        reply that gave the answer, so the next request can send it back. A
+        requires reasoning replay, ``compress+replay`` also keeps the thinking of
+        the reply that gave the answer, so the next request can send it back. A
         failure is logged, not raised, so it cannot replace the run's
         outcome or skip the save.
         """
@@ -4244,7 +4230,7 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             thinking = (
                 run.answer_thinking
                 if (
-                    self.options.reasoning in ("replay", "compress+replay")
+                    self.options.reasoning == "compress+replay"
                     and self._requires_replay
                 )
                 else ""
@@ -4776,7 +4762,6 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             config["window_messages"] = self.window_messages
         if opts.reasoning != "legacy":
             config["reasoning"] = opts.reasoning
-            config["replay_turns"] = opts.replay_turns
             config["note_writer"] = opts.note_writer
             config["retriever"] = opts.retriever
             config["retriever_effective"] = dict(sorted(self._plan.as_map().items()))

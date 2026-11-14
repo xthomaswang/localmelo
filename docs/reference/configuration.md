@@ -47,9 +47,8 @@ before the run with a plain message (see
 | `reasoning_field` | local or cloud backend | not set | The request key reasoning is sent back under: `auto`, `reasoning_content` or `reasoning`; `[ollama]` takes `auto` or `thinking` instead. See [Reasoning](#reasoning). |
 | `requires_reasoning_replay` | local or cloud backend | `false` | `true` when the server rejects a request that omits a reply's reasoning. See [Reasoning](#reasoning). |
 | `context_window`, `output_reserve`, `safety_margin` | `[agent]` | not set: the model server's context | An override of the context budget; all three positive integers must resolve, with a positive input limit. Unset, the budget is the context length the model server reports, up to 131,072 tokens. See [Context accounting](#context-accounting). |
-| `reasoning` | `[agent]` | `"legacy"` | `legacy`, `drop`, `replay`, `compress` or `compress+replay`; the saved default for direct runs, the interactive UI and API v2 console sessions. See [Reasoning](#reasoning). |
-| `replay_turns` | `[agent]` | not set | With `replay` or `compress+replay`, the newest N assistant turns whose reasoning is sent; omit for every turn in scope. |
-| `note_writer` | `[agent]` | `"auto"` | In the compress modes, `auto` (the model's `<note>`, else the heuristic) or `heuristic`. |
+| `reasoning` | `[agent]` | `"legacy"` | `legacy` or `compress`; the saved default for direct runs, the interactive UI and API v2 console sessions. See [Reasoning](#reasoning). |
+| `note_writer` | `[agent]` | `"auto"` | With `compress`, `auto` (the model's `<note>`, else the heuristic) or `heuristic`. |
 | `tool_env` | `[agent]` | `[]` | Extra environment variable names inherited by shell/Python tools in config-backed runs and sessions. Values are never saved; see [Tool environment](#tool-environment). |
 | `window_eviction` | `[agent]` | `"chunk"` | `chunk` or `boundary`: when working memory drops old turns. See [Memory](memory.md#working-memory-window). |
 | `confine_writes` | `[agent]` | `true` | On macOS, `--brief` worker runs and saved tasks start `shell_exec` and `python_exec` in a sandbox that refuses file writes outside the workspace; `false` turns it off (`-X agent.confine_writes=false` for one run). Other runs confine only the calls Auto decides (`[approvals] mode`). See [Writes stay in the workspace](cli.md#confined-writes). |
@@ -66,7 +65,7 @@ before the run with a plain message (see
 | `recall_at` | `[retrieval]` | not set | A list of `start`, `attempt`, `step` and `tool`. Omit for `start`, `attempt` and `step`; `tool` is never on unless named. |
 | `k` | `[retrieval]` | `3` | Task-local hits per recall, from 1 to 10. |
 | `kinds` | `[retrieval]` | not set | A list of `note`, `draft`, `thought`, `digest`, `reflection` and `long`. Omit for all but `thought`. |
-| `placement` | `[retrieval]` | `"tool"` | `tool` (append to the last tool result) or `message` (its own user message). `message` is refused in `replay` and `compress+replay`. |
+| `placement` | `[retrieval]` | `"tool"` | `tool` (append to the last tool result) or `message` (its own user message). `message` is refused on a backend that requires replay. |
 | `min_score` | `[retrieval]` | `0.35` | The cosine floor for embedding and long-term cosine hits, from 0 to 1. Inert for the task-local `bm25` and `llm` ranking and for a long-term row that only BM25 scored. |
 | `cross_task_ratio` | `[retrieval]` | `1.1` | Cross-task episodic digests need this multiple of the best same-task digest's score from the same long-store backend; 1–10. |
 | `cross_task_cap` | `[retrieval]` | `1` | Maximum cross-task digests per recall, 0–2; the existing total long-hit limit remains two. |
@@ -162,24 +161,21 @@ How URLs are used:
 
 `legacy` is the default: an OpenAI-compatible backend sends no reasoning,
 and Ollama native sends its own `thinking` field and inline copy as before.
-`drop` never sends reasoning; `replay` sends it on the assistant turns in
-scope, under one key, at most 40,000 characters per turn (a longer turn's
-reasoning is skipped and counted).
+`compress` sends none and keeps each reply's note and drafts in working
+memory. A backend with `requires_reasoning_replay = true` cannot take a request
+without the reasoning, so there `compress` also sends it back.
 
-`compress` sends none and keeps each
-reply's note and drafts in working memory; `compress+replay` does both. A
-backend with `requires_reasoning_replay = true` runs `compress` as
-`compress+replay`.
-
-Every explicit mode also
-removes an inline `<think>` block from the answer. The compress modes recall notes,
-drafts and earlier thinking by default; see
+`compress` also removes an inline `<think>` block from the answer, and recalls
+notes, drafts and earlier thinking by default; see
 [Recall in the loop](../concepts/memory.md#recall-in-the-loop).
+
+A config file that still holds `reasoning = "drop"`, `"replay"` or
+`"compress+replay"` loads and reads as `legacy`; `melo config` names the line.
+On the command line those values exit 2.
 
 ```toml
 [agent]
-reasoning = "replay"      # legacy, drop, replay, compress, compress+replay
-replay_turns = 3          # optional; omit for every turn
+reasoning = "compress"    # legacy or compress
 note_writer = "auto"      # optional: auto or heuristic
 ```
 
@@ -233,22 +229,20 @@ requires_reasoning_replay = false     # true for a server that rejects a
 `auto` follows the key the last reply's reasoning came from, so a backend
 that emits either `reasoning_content` or `reasoning` works as it is; it
 sends no key before the first reply. For OpenAI-compatible backends, the
-field is used only by `replay` and `compress+replay`: `legacy`, `drop` and
-`compress` ignore it, including through scheduler wrappers.
+field is used only when `compress` sends the reasoning back, on a backend with
+`requires_reasoning_replay = true`: `legacy` and every other run ignore it,
+including through scheduler wrappers.
 
-Native Ollama keeps its existing legacy wire behavior. `replay` uses the
-current task's assistant turns in direct runs and the `melo ""` loop;
-session builders select the retained conversation window instead.
+Native Ollama keeps its existing legacy wire behavior.
 
 Session resume uses the current process's mode: pairs contain no old thinking,
 while a window checkpoint can replay its retained, redacted thinking.
 The `[ollama]` backend fixes its field
 to `thinking` (it may still write `"thinking"` or `"auto"`).
 
-With `requires_reasoning_replay = true`, `--reasoning drop` is refused, every
-assistant turn in the window is replayed (the task scope and
-`replay_turns` do not apply), and the agent evicts whole working-memory
-units instead of cutting reasoning.
+With `requires_reasoning_replay = true`, `compress` replays every assistant
+turn in the window, and the agent evicts whole working-memory units instead of
+cutting reasoning.
 
 ### Tool environment
 

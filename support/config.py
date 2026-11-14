@@ -61,7 +61,9 @@ VALID_CHAT_BACKENDS = (*LOCAL_BACKENDS, *CLOUD_BACKENDS)
 VALID_EMBEDDING_BACKENDS = (*LOCAL_BACKENDS, "none")
 # Another spelling of "vllm" that a config file may use for either backend.
 OMLX_ALIAS = "omlx"
-REASONING_MODES = ("legacy", "drop", "replay", "compress", "compress+replay")
+REASONING_MODES = ("legacy", "compress")
+# Removed values of agent.reasoning: a config file that holds one reads as "legacy".
+REMOVED_REASONING_MODES = ("drop", "replay", "compress+replay")
 NOTE_WRITERS = ("auto", "heuristic")
 WINDOW_EVICTIONS = ("chunk", "boundary")
 TOOL_IMAGES = ("auto", "on", "off")
@@ -229,8 +231,7 @@ class ApprovalsConfig:
 class AgentConfig:
     """The ``[agent]`` table: how a direct run or a session reasons."""
 
-    reasoning: str = "legacy"  # legacy | drop | replay | compress | compress+replay
-    replay_turns: int | None = None  # None: every turn in scope
+    reasoning: str = "legacy"  # legacy | compress
     note_writer: str = "auto"  # auto | heuristic (compress modes)
     tool_env: list[str] = field(default_factory=list)  # extra inherited variable names
     window_eviction: str = "chunk"  # chunk | boundary
@@ -997,9 +998,6 @@ class Config:
                 f"[agent] window_messages must be an int from "
                 f"{WINDOW_MESSAGES_MIN} to {WINDOW_MESSAGES_MAX}, got {window!r}"
             )
-        turns = agent.replay_turns
-        if turns is not None and turns < 1:
-            errors.append(f"[agent] replay_turns must be an int >= 1, got {turns!r}")
         names = ("context_window", "output_reserve", "safety_margin")
         budget = [getattr(agent, name) for name in names]
         errors.extend(
@@ -1532,6 +1530,11 @@ def _digits_as_text(value: Any) -> Any:
 _SPELLINGS: dict[str, Callable[[Any], Any]] = {
     # "slide" was removed (settings.removed_in says so); it reads as the default.
     "agent.window_eviction": lambda value: "chunk" if value == "slide" else value,
+    # "drop", "replay" and "compress+replay" were removed (settings.removed_in says so);
+    # they read as the default.
+    "agent.reasoning": lambda value: (
+        "legacy" if value in REMOVED_REASONING_MODES else value
+    ),
     # "model" and "model+tags" were removed; both did the rules first, so they read as "rules".
     "memory.sleep": lambda value: (
         "rules" if value in ("model", "model+tags") else value

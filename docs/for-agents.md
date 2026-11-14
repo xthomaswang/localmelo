@@ -129,7 +129,6 @@ it; the option shown still works. A comparison names the issue that decides it.
   mcp_config                   ""
   request_timeout_s            unset       --request-timeout
   agent.reasoning              legacy      --reasoning (#183)
-  agent.replay_turns           unset       --replay-turns (#183)
   agent.note_writer            auto        --note-writer (#183)
   agent.tool_env               []
   agent.window_eviction        chunk       --window-eviction (#183)

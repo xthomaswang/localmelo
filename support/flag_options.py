@@ -51,7 +51,6 @@ FLAG_OPTIONS: Final = (
     _flag("memory_dir"),
     _flag("timeout", "timeout_s"),
     _flag("reasoning"),
-    _flag("replay_turns"),
     _flag("note_writer"),
     _flag("retriever"),
     _flag("recall_at"),

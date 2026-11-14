@@ -466,30 +466,12 @@ admit_on_outcome`. Each behaves as its default did, `window_eviction = "slide"` 
 config` names it (see [Command line](cli.md#settings)). `[memory] followup_query` was removed
 too: a message with no content of its own is always searched with what you typed in the chat's
 last turns, as its default `"recent"` did, and a file that holds the key is handled the same way.
-`[agent] brief_items`, `lean_output` and `thinking_steps` were removed the same way: each run
-behaves as it did with the default, and a file that holds one of them is handled the same way.
+`[agent] brief_items`, `lean_output`, `thinking_steps` and `captured_history` were removed the
+same way: each run behaves as it did with the default, and a file that holds one of them is handled
+the same way.
 `[memory] note_gate` and `note_min_cosine` were removed too: the note gate has one rule (see
 [Memory](../concepts/memory.md)), as its default `"pointed"` had, and a file that holds either key,
 whatever its value, is handled the same way.
-
-Opt in to separate captured tool history with `[agent] captured_history = true` or
-`--captured-history on`; `off` overrides the setting. The checked preview uses a 50,000-character
-ceiling including truncation and image notices.
-
-History stores a distinct, pattern-redacted copy of
-up to 200,000 characters per result (errors first), with exact omitted counts relative to the
-redacted capture. Counts live in `capture_metadata`, not in-band markers in stored text.
-
-`acquisition_omitted_chars` is null because the tool may already have limited its
-output. Capture is not a complete file or unlimited stdout; redaction is pattern-based and can miss
-secrets.
-
-The model's checked preview can still contain raw text; the `Message.tool_result`,
-`tool.finished` event and trace use redacted copies. Existing history retention and permissions
-apply.
-
-`Agent.run_tool()` does not write captured history and retains its existing result check.
-The option is off by default.
 
 ## Embedding and long-term memory
 

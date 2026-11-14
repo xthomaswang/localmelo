@@ -74,7 +74,6 @@ P5_DEFAULTS = {"workspace": None}
 R6_DEFAULTS = {"keep_decision_text": False}
 # U3 PR 4 added --allow-unconfigured for --serve.
 U3_PR4_DEFAULTS = {"allow_unconfigured": False}
-CAPTURED_DEFAULTS = {"captured_history": None}
 WINDOW_EVICTION_DEFAULTS = {"window_eviction": None}
 WINDOW_MESSAGES_DEFAULTS = {"window_messages": None}
 WORKER_DEFAULTS = {
@@ -155,7 +154,6 @@ def test_historical_dispatch(
             **R6_DEFAULTS,
             **U3_PR4_DEFAULTS,
             **WORKER_DEFAULTS,
-            **CAPTURED_DEFAULTS,
             **WINDOW_EVICTION_DEFAULTS,
             **WINDOW_MESSAGES_DEFAULTS,
             "continue_session": False,
@@ -184,7 +182,6 @@ def test_historical_dispatch(
         **R6_DEFAULTS,
         **U3_PR4_DEFAULTS,
         **WORKER_DEFAULTS,
-        **CAPTURED_DEFAULTS,
         **WINDOW_EVICTION_DEFAULTS,
         **WINDOW_MESSAGES_DEFAULTS,
         **case["namespace"],

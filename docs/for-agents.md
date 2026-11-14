@@ -137,7 +137,6 @@ it; the option shown still works. A comparison names the issue that decides it.
   agent.context_window         unset       --context-window
   agent.output_reserve         unset       --output-reserve
   agent.safety_margin          unset       --safety-margin
-  agent.captured_history       false       --captured-history (#4)
   agent.confine_writes         true
   agent.confine_direct_runs    false
   agent.answer_on_stop         true         (#185)

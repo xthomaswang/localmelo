@@ -222,7 +222,6 @@ def configured_session_options(
             "replay_turns",
             "note_writer",
             *CACHE_SETTINGS,
-            "captured_history",
             *IMAGE_SETTINGS,
             *FALLBACK_SETTINGS,
         )

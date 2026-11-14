@@ -21,6 +21,7 @@ window_messages = 32
 thinking_steps = "first_and_failed"
 lean_output = true
 brief_items = true
+captured_history = true
 
 [memory]
 admit_on_outcome = true

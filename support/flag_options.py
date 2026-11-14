@@ -44,7 +44,6 @@ def _flag(
 FLAG_OPTIONS: Final = (
     _flag("window_eviction"),
     _flag("window_messages"),
-    _flag("captured_history", convert=_on),
     _flag("max_steps"),
     _flag("attempt_policy"),
     _flag("tool_exposure"),

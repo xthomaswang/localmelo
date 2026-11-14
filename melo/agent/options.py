@@ -187,9 +187,6 @@ class AgentOptions:
       ``replay`` does. A provider that requires replay runs ``compress``
       as ``compress+replay``, and the effective mode is what the run
       reports. Neither mode recalls anything yet (R5).
-    - ``captured_history``: opt in to a bounded, pattern-redacted history copy
-      of tool results, separate from the checked model preview. The option is
-      off by default; :meth:`Agent.run_tool` does not write history.
     - ``note_writer``: who writes a reply's note in the compress modes:
       ``"auto"`` (default) parses the model's ``<note>`` block and falls
       back to the heuristic, ``"heuristic"`` always writes it from the
@@ -379,7 +376,6 @@ class AgentOptions:
     keep_decision_text: bool = False
     # The surface the run belongs to; it decides the default built-ins.
     mode: ToolMode = "python"
-    captured_history: bool = False
     window_eviction: WindowEviction = "chunk"
     brief_probe: Callable[[str], str | None] | None = None
     brief_check: BriefCheck | None = None
@@ -539,7 +535,6 @@ class AgentOptions:
 
         for name in (
             "keep_decision_text",
-            "captured_history",
             "answer_on_stop",
             "confine_writes",
             "task_aids",

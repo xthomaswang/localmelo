@@ -47,11 +47,6 @@ from localmelo.melo.agent._brief_gate import (
 )
 from localmelo.melo.agent._call_budget import CallBudgetError, is_budget_refusal
 from localmelo.melo.agent._call_log import CallHistory, CallLog
-from localmelo.melo.agent._captured_history import (
-    capture_result,
-    preview_result,
-    split_image_notes,
-)
 from localmelo.melo.agent._chat import (
     BLOCKED_ANSWER_NOTE,
     BUDGET_ACCOUNTING,
@@ -113,7 +108,6 @@ from localmelo.melo.checker.tiers import (
 from localmelo.melo.checker.validators import (
     MAX_IMAGES_PER_RESULT,
     MAX_MEMORY_TEXT_LEN,
-    _sanitize_images,
     image_problem,
 )
 from localmelo.melo.contracts.approvals import (
@@ -724,9 +718,6 @@ class _InflightStep:
     results: list[ToolResult] = dataclasses.field(default_factory=list)
     # ... and, for each, the characters the executor-result check cut.
     cut_before: list[int] = dataclasses.field(default_factory=list)
-    captured: list[tuple[ToolResult, dict[str, Any]]] = dataclasses.field(
-        default_factory=list
-    )
     # The history records _do_memorize created, in call order, and how
     # many of them store_step finished writing: all of them, or all but
     # the last.
@@ -2245,16 +2236,6 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
                     result.error = f"{note}\n{result.error}"
                 elif note:
                     result.output = f"{note}\n{result.output}"
-            captured = None
-            if self.options.captured_history and run.inflight is not None:
-                kept, notes = _sanitize_images(outcome.images)
-                original = outcome.to_tool_result()
-                original.images = kept
-                result, cut = preview_result(original, notes)
-                captured = capture_result(original)
-                captured[1]["images_omitted"] = len(outcome.images) - len(kept)
-                captured[1]["status"] = outcome.status.value
-                captured[1]["error_category"] = outcome.error_category.value
         except BaseException as exc:
             events.tool_stopped(
                 call,
@@ -2281,13 +2262,10 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         )
         if result.no_more_calls:
             run.withdrawn.add(call.tool_name)
-        exported = (
-            preview_result(captured[0], notes)[0] if captured is not None else result
-        )
         events.tool_finished(
             call,
             outcome,
-            exported,
+            result,
             exit_codes=exit_codes,
             approval=None if gate is None else gate.asked,
             asks=refused,
@@ -2295,7 +2273,7 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         )
         run.note(
             lambda trace: trace.tool(
-                call.tool_name, call.arguments, outcome.status.value, exported.output
+                call.tool_name, call.arguments, outcome.status.value, result.output
             )
         )
         if call.tool_name in WRITE_TOOLS:
@@ -2310,8 +2288,6 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             path = call.arguments.get("path")
             if isinstance(path, str) and path.strip():
                 run.recent_path = path
-        if captured is not None and run.inflight is not None:
-            run.inflight.captured.append(captured)
         if self._notes_mode:
             run.attempt_calls.append((call, result))
             await self._rehearse_acted(call, result, run, exit_codes or ())
@@ -2441,12 +2417,10 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             await self._tool_images.prepare(step.results)
         kept = [_image_references(result) for result in step.results]
         for index, (call, result) in enumerate(zip(calls, kept, strict=True)):
-            captured = step.captured[index] if index < len(step.captured) else None
             record = StepRecord(
                 thought=response.content if index == 0 else "",
                 tool_call=call,
-                tool_result=_image_references(captured[0]) if captured else result,
-                capture_metadata=captured[1] if captured else None,
+                tool_result=result,
             )
             step.records.append(record)
             await self.hippo.store_step(task_id, record)
@@ -2469,7 +2443,6 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
                 response,
                 kept,
                 step.cut_before,
-                captured=step.captured,
                 content=content,
                 thinking=thinking,
             )
@@ -2520,7 +2493,7 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             run.pending_shown.clear()
             return
         assistant_msg, tool_msgs = self._checked_tool_turn(
-            response, kept, step.cut_before, captured=step.captured
+            response, kept, step.cut_before
         )
         recall_aliases = set(run.pending_shown)
         block, _hits = await self._step_recall(
@@ -2579,7 +2552,6 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         results: Sequence[ToolResult],
         cut_before: Sequence[int],
         *,
-        captured: Sequence[tuple[ToolResult, dict[str, Any]]] = (),
         content: str | None = None,
         thinking: str | None = None,
     ) -> tuple[Message, list[Message]]:
@@ -2639,13 +2611,9 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             text_share = len(full_text) - len(calls_text)
 
         texts: list[str] = []
-        image_notes: list[str] = []
         withheld: set[int] = set()
         for index, result in enumerate(results):
             text = _tool_result_text(result)
-            if self.options.captured_history:
-                text, image_note = split_image_notes(text)
-                image_notes.append(image_note)
             # A text too long for one write is checked as the budget below
             # keeps it: cut. A memory write needs text: an image-only
             # result is checked with the line that names its images.
@@ -2661,24 +2629,13 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
                 text = _withheld_notice(text, check.reason)
                 withheld.add(index)
             texts.append(text)
-        note_reserve = 0
-        if self.options.captured_history:
-            note_reserve = sum(len(note) + bool(note) for note in image_notes)
-            note_reserve += sum(
-                len(describe_images(r.images)) + bool(r.images) for r in results
-            )
         texts = _within_turn_budget(
             texts,
             withheld,
             len(calls_text),
-            limit=MAX_MEMORY_TEXT_LEN - text_share - note_reserve,
+            limit=MAX_MEMORY_TEXT_LEN - text_share,
             cut_before=cut_before,
         )
-        if self.options.captured_history:
-            texts = [
-                "\n".join(part for part in (text, note) if part)
-                for text, note in zip(texts, image_notes, strict=True)
-            ]
 
         turn_chars = len(full_text) + sum(len(text) for text in texts)
         if turn_chars > MAX_MEMORY_TEXT_LEN or not text_allowed:
@@ -2689,46 +2646,13 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             role="assistant", content=content, tool_calls=calls, thinking=thinking
         )
 
-        def message_result(result: ToolResult, text: str, index: int) -> ToolResult:
-            if not self.options.captured_history:
-                return result
-            if index < len(captured) and not captured[index][1].get("redactions"):
-                safe_text = text
-            elif index < len(captured):
-                safe, safe_cut = preview_result(captured[index][0])
-                safe_body = _tool_result_text(safe)
-                note = image_notes[index]
-                if index in withheld:
-                    safe_body = "\n".join(
-                        (
-                            "[Tool result withheld from working memory]",
-                            safe_body[:WITHHELD_PREVIEW_CHARS],
-                        )
-                    )
-                else:
-                    room = max(0, len(text) - len(note) - bool(note))
-                    safe_body = _cut_to(safe_body, room, cut_before=safe_cut)
-                safe_text = "\n".join(part for part in (safe_body, note) if part)
-            else:
-                safe_text = (
-                    text
-                    if result.error in (CALL_INTERRUPTED, CALL_NOT_STARTED)
-                    else "[Tool result unavailable]"
-                )
-            return dataclasses.replace(
-                result,
-                output="" if result.error else safe_text,
-                error=safe_text.removeprefix("Error: ") if result.error else "",
-                images=[] if index in withheld else result.images,
-            )
-
         unseen = self._unseen_line()
         tool_msgs = [
             Message(
                 role="tool",
                 content=_tool_message_content(text, result.images, unseen),
                 tool_call_id=call.id,
-                tool_result=message_result(result, text, index),
+                tool_result=result,
                 images=[] if index in withheld else result.images,
             )
             for index, (call, result, text) in enumerate(
@@ -4505,7 +4429,6 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
                 step.response,
                 closed,
                 cut_before,
-                captured=step.captured[: len(step.results)],
                 content=content,
                 thinking=thinking,
             )
@@ -4517,10 +4440,7 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
             )
             return
         assistant_msg, tool_msgs = self._checked_tool_turn(
-            step.response,
-            closed,
-            cut_before,
-            captured=step.captured[: len(step.results)],
+            step.response, closed, cut_before
         )
         self.hippo.working.append_turn(
             assistant_msg, tool_msgs, aliases=step.thought_aliases
@@ -4703,16 +4623,10 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         calls = step.response.tool_calls
         for index in range(len(step.records), len(calls)):
             try:
-                captured = step.captured[index] if index < len(step.captured) else None
                 record = StepRecord(
                     thought=step.response.content if index == 0 else "",
                     tool_call=calls[index],
-                    tool_result=(
-                        _image_references(captured[0])
-                        if captured
-                        else step.closed[index]
-                    ),
-                    capture_metadata=captured[1] if captured else None,
+                    tool_result=step.closed[index],
                 )
                 await self.hippo.store_step(task_id, record)
                 written.append(record.step_id)

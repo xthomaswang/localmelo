@@ -239,7 +239,6 @@ class AgentConfig:
     context_window: int | None = None
     output_reserve: int | None = None
     safety_margin: int | None = None
-    captured_history: bool = False  # opt-in redacted captured tool results
     # Worker runs (--brief) and saved tasks: shell_exec and python_exec write only
     # in the workspace on macOS (AgentOptions.confine_writes); false turns it off.
     confine_writes: bool = True

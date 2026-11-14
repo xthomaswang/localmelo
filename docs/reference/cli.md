@@ -91,7 +91,6 @@ and `melo config set KEY VALUE` saves it (see [Settings](#settings)).
 | `--reasoning` | `-X agent.reasoning=VALUE` |
 | `--replay-turns` | `-X agent.replay_turns=VALUE` |
 | `--note-writer` | `-X agent.note_writer=VALUE` |
-| `--captured-history` | `-X agent.captured_history=VALUE` |
 | `--context-window` | `-X agent.context_window=VALUE` |
 | `--output-reserve` | `-X agent.output_reserve=VALUE` |
 | `--safety-margin` | `-X agent.safety_margin=VALUE` |
@@ -360,7 +359,6 @@ two equal.
 | `--replay-turns` | experimental | #183 |
 | `--note-writer` | experimental | #183 |
 | `--tool-exposure` | experimental | #3 |
-| `--captured-history` | experimental | #4 |
 | `--retriever` | experimental | #4 |
 | `--recall-at` | experimental | #4 |
 | `--recall-k` | experimental | #4 |
@@ -436,7 +434,6 @@ accepts the options named in [Interactive UI](#interactive-ui).
 | `--workspace DIR` | the current folder | The folder the run works in: the file tools stay inside it and `shell_exec` and `python_exec` start there; see [With a workspace root](../guides/tools-mcp.md#with-a-workspace-root). |
 | `--window-eviction chunk\|boundary` | `chunk` | How working memory drops old turns: `chunk` eight messages at a time; `boundary` also drops a finished attempt's turns at the next attempt. Overrides `[agent] window_eviction`; see [Memory](memory.md#working-memory-window). |
 | `--window-messages N` | `64` on a local server or a URL (`256` with a token budget), `20` on a cloud vendor | The working window's message cap, 8 to 256; `20` sends the earlier cap. Overrides `[agent] window_messages`; see [Memory](memory.md#working-memory-window). |
-| `--captured-history on\|off` | `off` | Store a bounded, pattern-redacted captured result separately from the model preview; see [configuration](configuration.md#context-accounting). |
 | `--context-window N`, `--output-reserve N`, `--safety-margin N` | not set | Opt in to per-request context accounting; all three must resolve to positive integers and the window must exceed the other two combined. |
 | `--max-steps N` | `100` | The most planning steps the whole run may take (also `-s N`). |
 | `--attempt-policy reflect\|none` | `reflect` | `reflect`: attempts of `agent.steps_per_attempt` steps (50) with a reflection after each. `none`: one attempt of `--max-steps` steps, no reflection. `[agent] reflection = false` (**Reflect when stuck after many steps** in Settings, or `-X agent.reflection=off` for one run) gives `none` to every run that reads the config; this option keeps its say over it. |

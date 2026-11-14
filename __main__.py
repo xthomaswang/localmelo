@@ -1431,7 +1431,6 @@ class _WorkerFlagParser(argparse.ArgumentParser):
             "--window-eviction",
             "--window-messages",
             "--developer",
-            "--captured-history",
             "--context-window",
             "--output-reserve",
             "--safety-margin",
@@ -1575,11 +1574,6 @@ def _build_parser(
         "--attempt-policy",
         choices=["reflect", "none"],
         help="Reflect between attempts (default), or run one attempt",
-    )
-    direct.add_argument(
-        "--captured-history",
-        choices=["on", "off"],
-        help="Store bounded, redacted captured tool results (default off)",
     )
     direct.add_argument(
         "--window-eviction",
@@ -2411,8 +2405,6 @@ def _build_direct_mode_agent(
         keep=flagged,
         backend=OPENAI_COMPATIBLE if base_url else None,
     )
-    if "captured_history" not in flagged and budget_cfg.agent.captured_history:
-        options = dataclasses.replace(options, captured_history=True)
     if options.answer_on_stop != budget_cfg.agent.answer_on_stop:
         options = dataclasses.replace(
             options, answer_on_stop=budget_cfg.agent.answer_on_stop

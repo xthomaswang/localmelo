@@ -83,8 +83,8 @@ def configured_cache_options(
 
 # The three that make up the context budget: all set or none (AgentOptions).
 CONTEXT_SETTINGS: Final = ("context_window", "output_reserve", "safety_margin")
-# The settings of the pictures that tools return (AgentOptions.tool_images).
-IMAGE_SETTINGS: Final = ("tool_images", "tool_images_keep", "tool_images_retire")
+# The setting of the pictures that tools return (AgentOptions.tool_images).
+IMAGE_SETTINGS: Final = ("tool_images",)
 # The setting of the model's thinking: what a turn that ends with only thinking
 # becomes (AgentOptions.empty_reply_fallback).
 FALLBACK_SETTINGS: Final = ("empty_reply_fallback",)

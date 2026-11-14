@@ -292,10 +292,8 @@ class AgentOptions:
       confine_writes`` is false. Default false: nothing changes.
     - ``tool_images``: whether the pictures that tools return reach the
       model. ``"off"`` names them in the tool message only, as before
-      this option. ``"on"`` also sends the pixels of the newest
-      ``tool_images_keep`` of them (up to ``tool_images_keep +
-      tool_images_retire - 1``; the oldest ``tool_images_retire`` retire
-      together) in each planning request, scaled to at most 1,280 pixels
+      this option. ``"on"`` also sends the pixels of the newest 3 of them
+      (up to 4; the oldest 2 retire together) in each planning request, scaled to at most 1,280 pixels
       wide once, when stored, and each counts toward the prompt cap (see
       ``melo/agent/_tool_images.py``). ``"auto"``, the default, is
       ``"on"`` when the provider says the model reads images
@@ -381,8 +379,6 @@ class AgentOptions:
     confine_writes: bool = False
     identity: str | None = None
     tool_images: ToolImages = "auto"
-    tool_images_keep: int = 3
-    tool_images_retire: int = 2
     answer_on_stop: bool = True
     max_calls: int | None = None
     task_aids: bool = False
@@ -456,8 +452,6 @@ class AgentOptions:
             "max_steps",
             "steps_per_attempt",
             "max_attempts",
-            "tool_images_keep",
-            "tool_images_retire",
         ):
             value = getattr(self, name)
             if not _is_positive_int(value):

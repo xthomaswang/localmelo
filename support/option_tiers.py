@@ -117,8 +117,6 @@ EXPERIMENTAL_ISSUES: dict[str, str] = {
 EXPERIMENTAL_KEYS: dict[str, str] = {
     "agent.answer_on_stop": "#185",
     "agent.steps_per_attempt": "#185",
-    "agent.tool_images_keep": "#280",
-    "agent.tool_images_retire": "#280",
     "memory.sleep": "#363",
     "memory.sleep_lock": "#363",
     "memory.recall_form": "#428",
@@ -196,6 +194,8 @@ REMOVED_SETTINGS: dict[str, str] = {
     "agent.brief_items": "a brief run never lists the brief's numbered items",
     "agent.captured_history": "history keeps each tool result as the check left it",
     "agent.replay_turns": "a reply's reasoning is sent back for every turn in scope",
+    "agent.tool_images_keep": "a request carries the newest 3 tool pictures, and 4 just before 2 retire",
+    "agent.tool_images_retire": "the oldest 2 tool pictures lose their pixels together",
     "memory.recall_records": "recall holds at most 3 notes",
     "memory.recall_docs": "recall holds at most 2 chat turns",
     "memory.recall_chars": "the recall block holds at most 4000 characters",

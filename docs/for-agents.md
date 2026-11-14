@@ -141,8 +141,6 @@ it; the option shown still works. A comparison names the issue that decides it.
   agent.answer_on_stop         true         (#185)
   agent.max_calls              unset
   agent.tool_images            auto
-  agent.tool_images_keep       3            (#280)
-  agent.tool_images_retire     2            (#280)
   agent.empty_reply_fallback   on
   agent.reflection             true
   agent.steps_per_attempt      unset        (#185)

@@ -23,6 +23,8 @@ lean_output = true
 brief_items = true
 captured_history = true
 replay_turns = 3
+tool_images_keep = 4
+tool_images_retire = 1
 
 [memory]
 admit_on_outcome = true

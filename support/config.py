@@ -255,10 +255,8 @@ class AgentConfig:
     # has (AgentOptions.max_calls). None: no limit.
     max_calls: int | None = None
     # Pictures tools return reach the model: auto (when the server says the model
-    # reads images) | on | off; the newest keep, retired retire at a time.
+    # reads images) | on | off.
     tool_images: str = "auto"
-    tool_images_keep: int = 3
-    tool_images_retire: int = 2
     # Developer setting: a turn that ends with no answer from a model that did
     # think (an empty reply, or a reply that ends inside its thinking) is asked
     # once more with thinking off where the service has a switch for it, and
@@ -285,18 +283,13 @@ class AgentConfig:
 
 
 def tool_images_errors(agent: AgentConfig) -> list[str]:
-    """What is wrong with ``[agent] tool_images`` and its two counts."""
-    errors: list[str] = []
-    if agent.tool_images not in TOOL_IMAGES:
-        errors.append(
-            f"[agent] tool_images {agent.tool_images!r} is not recognised. "
-            f"Must be one of {TOOL_IMAGES}."
-        )
-    for name in ("tool_images_keep", "tool_images_retire"):
-        value = getattr(agent, name)
-        if value < 1:
-            errors.append(f"[agent] {name} must be an int >= 1, got {value!r}")
-    return errors
+    """What is wrong with ``[agent] tool_images``."""
+    if agent.tool_images in TOOL_IMAGES:
+        return []
+    return [
+        f"[agent] tool_images {agent.tool_images!r} is not recognised. "
+        f"Must be one of {TOOL_IMAGES}."
+    ]
 
 
 def empty_reply_fallback_errors(agent: AgentConfig) -> list[str]:

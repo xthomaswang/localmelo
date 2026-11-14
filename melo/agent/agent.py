@@ -1257,9 +1257,7 @@ class Agent(_RecallLoop, _NotesLoop, _CheckpointLoop):
         # self._embedding stays set so close() closes it.
         # Pictures tools return (AgentOptions.tool_images): the store whose
         # payloads planning requests carry; "auto" asks the provider once.
-        self._tool_images = ToolImageStore(
-            self.options.tool_images_keep, self.options.tool_images_retire
-        )
+        self._tool_images = ToolImageStore()
         self._images_on: bool | None = {"on": True, "off": False}.get(
             self.options.tool_images
         )

@@ -156,7 +156,6 @@ def make_agent(
     # them; interactive mode is the one whose policy lets an exec tool run
     # without it being named in `builtins` (P13b).
     options.setdefault("mode", "interactive")
-    options.setdefault("tool_exposure", "all")
     agent = Agent(llm=llm, options=AgentOptions(**options))
     tools = tools or Tools()
     functions: dict[str, Callable[..., Any]] = {

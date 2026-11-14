@@ -20,6 +20,7 @@ from localmelo.support.gateway.console import Console
 from localmelo.support.gateway.console import front as front_module
 from localmelo.support.gateway.console.front import (
     FRONT_TEXT,
+    TASK_TOOLS,
     answer_head,
     clean_title,
 )
@@ -112,9 +113,17 @@ async def test_every_request_tells_the_chat_to_act(tmp_path: Path) -> None:
         await _say(client, console, "tidy my notes")
         await _wait_turn(client, str(console.main_id))
         assert FRONT_TEXT in llm.requests[0][0].content
+    # Who does the work is decided before it starts, and by the model: long work is
+    # a task's, the rest the chat's, and a doubt starts in the chat.
+    choice = FRONT_TEXT.index("decide first who does it")
+    assert choice < FRONT_TEXT.index("start right away")
+    assert "A task does the long work" in FRONT_TEXT
+    assert "When you cannot tell, start it yourself" in FRONT_TEXT
+    [task_create] = [tool for tool in TASK_TOOLS if tool.name == "task_create"]
+    assert "for long work" in task_create.description
     # One instruction for handing the rest on (#571): no step count, no meter.
     [rule] = [line for line in FRONT_TEXT.split(". ") if "continue_current" in line]
-    assert "finish it here" in FRONT_TEXT and "large tool or page material" in rule
+    assert "turns out long" in rule and "large tool or page material" in rule
     assert not any(ch.isdigit() for ch in rule)
 
 
